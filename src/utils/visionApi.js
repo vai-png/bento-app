@@ -1317,12 +1317,12 @@ function getGeminiBaseUrls() {
 async function callGeminiApi({ prompt, base64 = null, mediaType = "image/jpeg", cleanKey, timeoutMs = 12000 }) {
   const baseUrls = getGeminiBaseUrls();
   // Active Google Gemini models on v1beta
-  // NOTE: gemini-2.0-flash is deprecated/discontinued by Google; gemini-2.5-flash is the primary active replacement
+  // NOTE: gemini-3.8-flash is the primary active flagship model (Sept 2026)
   const models = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
   ];
 
   const parts = [{ text: prompt }];
@@ -1339,6 +1339,9 @@ async function callGeminiApi({ prompt, base64 = null, mediaType = "image/jpeg", 
     contents: [{ parts }],
     generationConfig: {
       responseMimeType: "application/json",
+      thinkingConfig: {
+        thinkingLevel: "low",
+      },
     },
   });
 
@@ -1361,12 +1364,32 @@ async function callGeminiApi({ prompt, base64 = null, mediaType = "image/jpeg", 
         if (response.ok) {
           const data = await response.json();
           const candidate = data?.candidates?.[0];
-          const rawText = candidate?.content?.parts?.[0]?.text;
-          const parsed = extractJson(rawText);
+          const responseParts = candidate?.content?.parts || [];
+          let parsed = null;
+
+          // Search candidate parts for JSON, prioritizing non-thought answer parts
+          for (let i = responseParts.length - 1; i >= 0; i--) {
+            const p = responseParts[i];
+            if (p && p.text && !p.thought) {
+              parsed = extractJson(p.text);
+              if (parsed) break;
+            }
+          }
+          // Fallback to any part with JSON
+          if (!parsed) {
+            for (let i = responseParts.length - 1; i >= 0; i--) {
+              if (responseParts[i]?.text) {
+                parsed = extractJson(responseParts[i].text);
+                if (parsed) break;
+              }
+            }
+          }
+
           if (parsed) {
             return parsed;
           }
-          throw new Error("AI returned unparseable nutrition data. Please retry.");
+          console.warn(`Gemini model ${model} response did not contain valid JSON, trying next model...`);
+          continue;
         }
 
         const errData = await response.json().catch(() => ({}));
@@ -1384,7 +1407,7 @@ async function callGeminiApi({ prompt, base64 = null, mediaType = "image/jpeg", 
           console.warn(`Gemini model ${model} rate limited (429), trying fallback model...`);
           continue; // Try next model immediately
         }
-        if (response.status === 404 || errMsg.includes("no longer available") || errMsg.includes("not found")) {
+        if (response.status === 404 || errMsg.includes("no longer available") || errMsg.includes("not found") || errMsg.includes("not supported")) {
           console.warn(`Gemini model ${model} unavailable (${errMsg}), trying next model...`);
           continue; // Try next model immediately
         }
