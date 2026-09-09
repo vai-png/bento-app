@@ -1301,7 +1301,8 @@ function getGeminiBaseUrls() {
       origin.startsWith("capacitor://") ||
       (origin.startsWith("http://localhost") && !origin.includes(":5173"))
     );
-    if (!isCapacitor && origin && (origin.includes(":5173") || origin.includes(".lhr.life") || origin.includes("192.168.") || origin.includes("localhost"))) {
+    // Any browser / web host (Vercel, Netlify, Vite dev, tunnel) routes via /gemini-api
+    if (!isCapacitor && origin && (origin.startsWith("http://") || origin.startsWith("https://"))) {
       urls.push(`${origin}/gemini-api`);
     }
   }
@@ -1310,13 +1311,19 @@ function getGeminiBaseUrls() {
 }
 
 /**
- * Executes a Gemini request with instant model fallback, Vite proxy routing, and timeout protection.
+ * Executes a Gemini request with instant model fallback, proxy routing, and timeout protection.
  * Skips the slow ListModels roundtrip to achieve sub-2-second scan speeds.
  */
 async function callGeminiApi({ prompt, base64 = null, mediaType = "image/jpeg", cleanKey, timeoutMs = 12000 }) {
   const baseUrls = getGeminiBaseUrls();
-  // Preferred fast multimodal models on v1beta
-  const models = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.0-flash"];
+  // Active Google Gemini models on v1beta
+  // NOTE: gemini-2.0-flash is deprecated/discontinued by Google; gemini-2.5-flash is the primary active replacement
+  const models = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+  ];
 
   const parts = [{ text: prompt }];
   if (base64) {
@@ -1377,7 +1384,12 @@ async function callGeminiApi({ prompt, base64 = null, mediaType = "image/jpeg", 
           console.warn(`Gemini model ${model} rate limited (429), trying fallback model...`);
           continue; // Try next model immediately
         }
+        if (response.status === 404 || errMsg.includes("no longer available") || errMsg.includes("not found")) {
+          console.warn(`Gemini model ${model} unavailable (${errMsg}), trying next model...`);
+          continue; // Try next model immediately
+        }
         console.warn(`Gemini model ${model} returned ${response.status}:`, errMsg);
+        continue; // Try next model immediately
       } catch (err) {
         if (
           err.message.includes("Invalid Gemini API key") ||
