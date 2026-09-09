@@ -1871,12 +1871,31 @@ function PhotoCaptureTab({ kind, apiKey, onDone, onClose }) {
       )}
 
       {status === "error" && (
-        <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs flex flex-col gap-1 mb-3">
+        <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs flex flex-col gap-2 mb-3">
           <div className="flex items-center gap-1.5 font-bold">
             <AlertCircle size={15} className="shrink-0" />
-            <span>AI Analysis Error</span>
+            <span>AI Analysis Notice</span>
           </div>
           <p className="text-[11px] leading-relaxed text-rose-400 pl-5">{errorMessage}</p>
+          <div className="flex items-center gap-2 pl-5 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setStatus("idle");
+                setErrorMessage("");
+              }}
+              className="px-3 py-1 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-400 text-[11px] font-bold transition"
+            >
+              Try Again
+            </button>
+            <button
+              type="button"
+              onClick={runSampleDemo}
+              className="px-3 py-1 rounded-lg border border-pink-500/30 text-pink-400 text-[11px] font-bold transition"
+            >
+              Use Sample Data
+            </button>
+          </div>
         </div>
       )}
 

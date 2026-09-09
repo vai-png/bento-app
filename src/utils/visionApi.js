@@ -1283,14 +1283,15 @@ async function getAvailableGeminiModels(cleanKey) {
         .map((m) => m.name.replace(/^models\//, ""));
 
       if (contentModels.length > 0) {
-        // Preferred ordering: gemini-2.0-flash, gemini-1.5-flash, gemini-2.5-flash, gemini-1.5-flash-8b, gemini-1.5-pro, etc.
+        // Preferred ordering: gemini-1.5-flash, gemini-1.5-flash-8b, gemini-2.0-flash, others
+        // 1.5-flash and 1.5-flash-8b have the highest RPM limits and lowest 429 rate-limit triggers on free tier
         const rank = (name) => {
-          if (name === "gemini-2.0-flash") return 1;
-          if (name.includes("2.0-flash")) return 2;
-          if (name === "gemini-1.5-flash") return 3;
+          if (name === "gemini-1.5-flash") return 1;
+          if (name === "gemini-1.5-flash-8b") return 2;
+          if (name === "gemini-2.0-flash") return 3;
           if (name.includes("1.5-flash")) return 4;
-          if (name.includes("2.5-flash")) return 5;
-          if (name.includes("1.5-pro")) return 6;
+          if (name.includes("2.0-flash")) return 5;
+          if (name.includes("pro")) return 6;
           return 10;
         };
         return contentModels.sort((a, b) => rank(a) - rank(b));
@@ -1313,9 +1314,9 @@ async function getAvailableGeminiModels(cleanKey) {
 
   // Safe fallback list on v1beta ONLY (never v1)
   return [
-    "gemini-2.0-flash",
     "gemini-1.5-flash",
     "gemini-1.5-flash-8b",
+    "gemini-2.0-flash",
     "gemini-1.5-pro",
   ];
 }
@@ -1678,14 +1679,16 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
           throw new Error("Gemini API permission denied (403). Ensure Generative Language API is enabled for this key.");
         }
         if (response.status === 429) {
-          throw new Error("Gemini API rate limit or quota exceeded (429). Please wait a moment.");
+          geminiLastError = "Gemini API free tier rate limit reached (429). Google AI Studio limits requests per minute — please wait 30-60 seconds, try another model, or create a fresh key at aistudio.google.com.";
+          console.warn(`Gemini model ${model} rate limited (429), trying fallback model...`);
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
         }
       }
     } catch (err) {
       if (
         err.message.includes("Invalid Gemini API key") ||
-        err.message.includes("Gemini API permission denied") ||
-        err.message.includes("Gemini API rate limit")
+        err.message.includes("Gemini API permission denied")
       ) {
         throw err;
       }
@@ -1695,7 +1698,7 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
 
   throw new Error(
     geminiLastError
-      ? `AI Vision failed (${geminiLastError}). Check your API key or use manual logging.`
+      ? `AI Vision: ${geminiLastError}`
       : "Could not analyze image with current API key. Check connection or use manual logging."
   );
 }
