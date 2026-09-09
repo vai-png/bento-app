@@ -68,7 +68,7 @@ import {
   ACTIVITY_LABELS,
   computeUserStreak,
 } from "./utils/nutrition.js";
-import { fileToBase64, analyzeImage, analyzeTextMeal } from "./utils/visionApi.js";
+import { fileToOptimizedImage, fileToBase64, analyzeImage, analyzeTextMeal } from "./utils/visionApi.js";
 
 /* ---------------------------------------------------------------- */
 /* Meal Configurations                                               */
@@ -1724,12 +1724,12 @@ function PhotoCaptureTab({ kind, apiKey, onDone, onClose }) {
     setResult(null);
     setErrorMessage("");
     try {
-      const base64 = await fileToBase64(file);
-      const parsed = await analyzeImage(base64, file.type || "image/jpeg", kind, apiKey);
+      const { base64, mediaType } = await fileToOptimizedImage(file);
+      const parsed = await analyzeImage(base64, mediaType, kind, apiKey);
       setResult(parsed);
       setStatus("done");
     } catch (err) {
-      console.error(err);
+      console.error("Image analysis error:", err);
       setStatus("error");
       setErrorMessage(err.message || "Could not analyze image.");
     }
@@ -1871,9 +1871,12 @@ function PhotoCaptureTab({ kind, apiKey, onDone, onClose }) {
       )}
 
       {status === "error" && (
-        <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs flex items-center gap-2 mb-3">
-          <AlertCircle size={15} className="shrink-0" />
-          <span>{errorMessage}</span>
+        <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs flex flex-col gap-1 mb-3">
+          <div className="flex items-center gap-1.5 font-bold">
+            <AlertCircle size={15} className="shrink-0" />
+            <span>AI Analysis Error</span>
+          </div>
+          <p className="text-[11px] leading-relaxed text-rose-400 pl-5">{errorMessage}</p>
         </div>
       )}
 

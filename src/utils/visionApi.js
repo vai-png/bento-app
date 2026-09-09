@@ -57,6 +57,59 @@ export function fileToBase64(file) {
   });
 }
 
+/**
+ * Optimizes an uploaded or camera-captured image for mobile upload & AI vision.
+ * - Downscales large iPhone photos (e.g. 12-48MP) to max 1200px.
+ * - Converts HEIC/HEIF/PNG into standard compressed image/jpeg (~150-250KB).
+ * - Drastically speeds up network transmission and guarantees compatibility.
+ */
+export function fileToOptimizedImage(file, maxDimension = 1200) {
+  return new Promise((resolve, reject) => {
+    if (!file) return reject(new Error("No image file provided"));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read image file"));
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== "string") {
+        return reject(new Error("Failed to read image data"));
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let { width, height } = img;
+          if (width > maxDimension || height > maxDimension) {
+            if (width > height) {
+              height = Math.round((height * maxDimension) / width);
+              width = maxDimension;
+            } else {
+              width = Math.round((width * maxDimension) / height);
+              height = maxDimension;
+            }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, width);
+          canvas.height = Math.max(1, height);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+          const optimizedDataUrl = canvas.toDataURL("image/jpeg", 0.85);
+          const base64 = optimizedDataUrl.split(",")[1];
+          resolve({ base64, mediaType: "image/jpeg" });
+        } catch (e) {
+          const rawBase64 = dataUrl.split(",")[1];
+          resolve({ base64: rawBase64, mediaType: file.type || "image/jpeg" });
+        }
+      };
+      img.onerror = () => {
+        const rawBase64 = dataUrl.split(",")[1];
+        resolve({ base64: rawBase64, mediaType: file.type || "image/jpeg" });
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 const NUMBER_WORDS = {
   half: 0.5,
   "1/2": 0.5,
@@ -1192,6 +1245,9 @@ function reconcileNutritionResult(res) {
 /**
  * Natural Language AI Meal Analyzer
  */
+/**
+ * Natural Language AI Meal Analyzer
+ */
 export async function analyzeTextMeal(description, apiKey = "") {
   const text = (description || "").trim();
   if (!text) throw new Error("Please enter a description of what you ate.");
@@ -1204,24 +1260,66 @@ export async function analyzeTextMeal(description, apiKey = "") {
     return reconcileNutritionResult(parseMealTextOffline(text));
   }
 
-  // Anthropic Claude
+  // 1. Anthropic Claude (Keys starting with "sk-ant")
   if (cleanKey.startsWith("sk-ant")) {
+    const claudeModels = ["claude-3-5-sonnet-20241022", "claude-3-7-sonnet-20250219", "claude-3-5-haiku-20241022"];
+    for (const model of claudeModels) {
+      try {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": cleanKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1000,
+            messages: [
+              {
+                role: "user",
+                content: `${TEXT_MEAL_PROMPT}\n\nUser meal description: "${text}"`,
+              },
+            ],
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const raw = (data.content || []).find((b) => b.type === "text")?.text;
+          if (raw) {
+            const clean = raw.replace(/```json|```/g, "").trim();
+            return reconcileNutritionResult(JSON.parse(clean));
+          }
+        }
+      } catch (err) {
+        console.warn(`Claude text estimation (${model}) error:`, err);
+      }
+    }
+    return reconcileNutritionResult(parseMealTextOffline(text));
+  }
+
+  // 2. OpenAI (Keys starting with "sk-")
+  if (cleanKey.startsWith("sk-")) {
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": cleanKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
+          "Authorization": `Bearer ${cleanKey}`,
         },
         body: JSON.stringify({
-          model: "claude-3-7-sonnet-20250219",
-          max_tokens: 1000,
+          model: "gpt-4o-mini",
+          response_format: { type: "json_object" },
           messages: [
             {
+              role: "system",
+              content: TEXT_MEAL_PROMPT,
+            },
+            {
               role: "user",
-              content: `${TEXT_MEAL_PROMPT}\n\nUser meal description: "${text}"`,
+              content: `User meal description: "${text}"`,
             },
           ],
         }),
@@ -1229,22 +1327,21 @@ export async function analyzeTextMeal(description, apiKey = "") {
 
       if (response.ok) {
         const data = await response.json();
-        const raw = (data.content || []).find((b) => b.type === "text")?.text;
+        const raw = data?.choices?.[0]?.message?.content;
         if (raw) {
           const clean = raw.replace(/```json|```/g, "").trim();
           return reconcileNutritionResult(JSON.parse(clean));
         }
       }
     } catch (err) {
-      console.warn("Claude text estimation error:", err);
+      console.warn("OpenAI text estimation error:", err);
     }
     return reconcileNutritionResult(parseMealTextOffline(text));
   }
 
-  // Google Gemini API
+  // 3. Google Gemini API
   const candidateModels = [
     "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
     "gemini-2.0-flash",
     "gemini-1.5-pro",
   ];
@@ -1344,34 +1441,95 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
     }
   }
 
-  // Claude Vision
+  const prompt = kind === "photo" ? FOOD_PHOTO_PROMPT : LABEL_PHOTO_PROMPT;
+
+  // 1. Anthropic Claude Vision (Keys starting with "sk-ant")
   if (cleanKey.startsWith("sk-ant")) {
-    const prompt = kind === "photo" ? FOOD_PHOTO_PROMPT : LABEL_PHOTO_PROMPT;
+    const claudeModels = ["claude-3-5-sonnet-20241022", "claude-3-7-sonnet-20250219", "claude-3-5-haiku-20241022"];
+    let claudeError = null;
+    for (const model of claudeModels) {
+      try {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": cleanKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1000,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: mediaType || "image/jpeg",
+                      data: base64,
+                    },
+                  },
+                  { type: "text", text: prompt },
+                ],
+              },
+            ],
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const raw = (data.content || []).find((b) => b.type === "text")?.text;
+          if (raw) {
+            const clean = raw.replace(/```json|```/g, "").trim();
+            const parsed = JSON.parse(clean);
+            return kind === "photo" ? reconcileNutritionResult(parsed) : parsed;
+          }
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          claudeError = errData?.error?.message || `Claude HTTP ${response.status}`;
+          if (response.status === 401) {
+            throw new Error("Invalid Anthropic Claude API key. Please check your key in Settings.");
+          }
+          if (response.status === 429) {
+            throw new Error("Anthropic API rate limit or credit quota exceeded.");
+          }
+        }
+      } catch (err) {
+        if (err.message.includes("Invalid Anthropic Claude API key") || err.message.includes("Anthropic API rate limit")) {
+          throw err;
+        }
+        claudeError = err.message;
+      }
+    }
+    throw new Error(`Claude Vision failed: ${claudeError || "Unknown error"}. Check API key and credits.`);
+  }
+
+  // 2. OpenAI Vision (Keys starting with "sk-" but not "sk-ant")
+  if (cleanKey.startsWith("sk-")) {
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": cleanKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
+          "Authorization": `Bearer ${cleanKey}`,
         },
         body: JSON.stringify({
-          model: "claude-3-7-sonnet-20250219",
-          max_tokens: 1000,
+          model: "gpt-4o-mini",
+          response_format: { type: "json_object" },
           messages: [
             {
               role: "user",
               content: [
+                { type: "text", text: prompt },
                 {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: mediaType || "image/jpeg",
-                    data: base64,
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${mediaType || "image/jpeg"};base64,${base64}`,
                   },
                 },
-                { type: "text", text: prompt },
               ],
             },
           ],
@@ -1380,25 +1538,36 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
 
       if (response.ok) {
         const data = await response.json();
-        const raw = (data.content || []).find((b) => b.type === "text")?.text;
+        const raw = data?.choices?.[0]?.message?.content;
         if (raw) {
           const clean = raw.replace(/```json|```/g, "").trim();
-          return JSON.parse(clean);
+          const parsed = JSON.parse(clean);
+          return kind === "photo" ? reconcileNutritionResult(parsed) : parsed;
         }
+      } else {
+        const errData = await response.json().catch(() => ({}));
+        const msg = errData?.error?.message || `OpenAI HTTP ${response.status}`;
+        if (response.status === 401) {
+          throw new Error("Invalid OpenAI API key. Please verify your API key in Settings.");
+        }
+        if (response.status === 429) {
+          throw new Error("OpenAI quota exceeded. Check your OpenAI billing.");
+        }
+        throw new Error(`OpenAI Vision failed: ${msg}`);
       }
     } catch (err) {
-      console.warn("Claude vision failed, falling back", err);
+      throw err;
     }
   }
 
-  // Gemini Vision
+  // 3. Google Gemini Vision (Default for AIzaSy... or standard Google AI Studio keys)
   const candidateModels = [
     "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
     "gemini-2.0-flash",
     "gemini-1.5-pro",
   ];
-  const prompt = kind === "photo" ? FOOD_PHOTO_PROMPT : LABEL_PHOTO_PROMPT;
+
+  let geminiLastError = null;
 
   for (const model of candidateModels) {
     for (const apiVersion of ["v1beta", "v1"]) {
@@ -1413,8 +1582,8 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
                 parts: [
                   { text: prompt },
                   {
-                    inline_data: {
-                      mime_type: mediaType || "image/jpeg",
+                    inlineData: {
+                      mimeType: mediaType || "image/jpeg",
                       data: base64,
                     },
                   },
@@ -1432,14 +1601,41 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
           const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
           if (rawText) {
             const clean = rawText.replace(/```json|```/g, "").trim();
-            return JSON.parse(clean);
+            const parsed = JSON.parse(clean);
+            return kind === "photo" ? reconcileNutritionResult(parsed) : parsed;
+          }
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          const errMsg = errData?.error?.message || response.statusText || `HTTP ${response.status}`;
+          geminiLastError = errMsg;
+          console.warn(`Gemini model ${model} (${apiVersion}) failed:`, errMsg);
+
+          if (response.status === 400 && (errMsg.includes("API key not valid") || errMsg.includes("API_KEY_INVALID"))) {
+            throw new Error("Invalid Gemini API key. Please verify your key in Settings/Profile.");
+          }
+          if (response.status === 403) {
+            throw new Error("Gemini API permission denied (403). Ensure Generative Language API is enabled for this key.");
+          }
+          if (response.status === 429) {
+            throw new Error("Gemini API rate limit or quota exceeded (429). Please wait a moment.");
           }
         }
       } catch (err) {
-        continue;
+        if (
+          err.message.includes("Invalid Gemini API key") ||
+          err.message.includes("Gemini API permission denied") ||
+          err.message.includes("Gemini API rate limit")
+        ) {
+          throw err;
+        }
+        geminiLastError = err.message;
       }
     }
   }
 
-  throw new Error("Could not analyze image with current API key. Check connection or use manual logging.");
+  throw new Error(
+    geminiLastError
+      ? `AI Vision failed (${geminiLastError}). Check your API key or use manual logging.`
+      : "Could not analyze image with current API key. Check connection or use manual logging."
+  );
 }
