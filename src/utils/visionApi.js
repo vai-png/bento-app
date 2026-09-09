@@ -68,7 +68,7 @@ export function fileToBase64(file) {
  * - Converts HEIC/HEIF/PNG into standard compressed image/jpeg (~150-250KB).
  * - Drastically speeds up network transmission and guarantees compatibility.
  */
-export function fileToOptimizedImage(file, maxDimension = 1200) {
+export function fileToOptimizedImage(file, maxDimension = 960) {
   return new Promise((resolve, reject) => {
     if (!file) return reject(new Error("No image file provided"));
     const reader = new FileReader();
@@ -97,7 +97,7 @@ export function fileToOptimizedImage(file, maxDimension = 1200) {
           canvas.height = Math.max(1, height);
           const ctx = canvas.getContext("2d");
           ctx.drawImage(img, 0, 0, width, height);
-          const optimizedDataUrl = canvas.toDataURL("image/jpeg", 0.85);
+          const optimizedDataUrl = canvas.toDataURL("image/jpeg", 0.80);
           const base64 = optimizedDataUrl.split(",")[1];
           resolve({ base64, mediaType: "image/jpeg" });
         } catch (e) {
@@ -1269,56 +1269,145 @@ function extractJson(text) {
 }
 
 /**
- * Discovers available models for a Gemini API key using Google's ListModels endpoint.
- * Fallback to stable default list on v1beta if ListModels is unavailable.
+ * Safe fetch with configurable timeout using AbortController.
+ * Prevents requests from hanging indefinitely on mobile networks.
  */
-async function getAvailableGeminiModels(cleanKey) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
-    if (res.ok) {
-      const data = await res.json();
-      const models = data?.models || [];
-      const contentModels = models
-        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
-        .map((m) => m.name.replace(/^models\//, ""));
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return response;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
-      if (contentModels.length > 0) {
-        // Preferred ordering: gemini-1.5-flash, gemini-1.5-flash-8b, gemini-2.0-flash, others
-        // 1.5-flash and 1.5-flash-8b have the highest RPM limits and lowest 429 rate-limit triggers on free tier
-        const rank = (name) => {
-          if (name === "gemini-1.5-flash") return 1;
-          if (name === "gemini-1.5-flash-8b") return 2;
-          if (name === "gemini-2.0-flash") return 3;
-          if (name.includes("1.5-flash")) return 4;
-          if (name.includes("2.0-flash")) return 5;
-          if (name.includes("pro")) return 6;
-          return 10;
-        };
-        return contentModels.sort((a, b) => rank(a) - rank(b));
-      }
-    } else {
-      const err = await res.json().catch(() => ({}));
-      const msg = err?.error?.message || "";
-      if (res.status === 400 && (msg.includes("API key not valid") || msg.includes("API_KEY_INVALID"))) {
-        throw new Error("Invalid Gemini API key. Please verify your key in Settings/Profile.");
-      }
-      if (res.status === 403) {
-        throw new Error("Gemini API permission denied (403). Make sure Generative Language API is enabled for this key.");
-      }
+/**
+ * Returns prioritized Gemini API base URLs.
+ * In a browser served by Vite or the public tunnel, routing via /gemini-api
+ * completely bypasses mobile browser CORS restrictions and network drops.
+ * In native Capacitor Android or direct environments, falls back to direct Google endpoints.
+ */
+function getGeminiBaseUrls() {
+  const urls = [];
+  if (typeof window !== "undefined" && window.location) {
+    const origin = window.location.origin || "";
+    const isCapacitor = Boolean(
+      window.Capacitor?.isNativePlatform?.() ||
+      origin.startsWith("capacitor://") ||
+      (origin.startsWith("http://localhost") && !origin.includes(":5173"))
+    );
+    if (!isCapacitor && origin && (origin.includes(":5173") || origin.includes(".lhr.life") || origin.includes("192.168.") || origin.includes("localhost"))) {
+      urls.push(`${origin}/gemini-api`);
     }
-  } catch (err) {
-    if (err.message.includes("Invalid Gemini API key") || err.message.includes("Gemini API permission denied")) {
-      throw err;
+  }
+  urls.push("https://generativelanguage.googleapis.com");
+  return urls;
+}
+
+/**
+ * Executes a Gemini request with instant model fallback, Vite proxy routing, and timeout protection.
+ * Skips the slow ListModels roundtrip to achieve sub-2-second scan speeds.
+ */
+async function callGeminiApi({ prompt, base64 = null, mediaType = "image/jpeg", cleanKey, timeoutMs = 12000 }) {
+  const baseUrls = getGeminiBaseUrls();
+  // Preferred fast multimodal models on v1beta
+  const models = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.0-flash"];
+
+  const parts = [{ text: prompt }];
+  if (base64) {
+    parts.push({
+      inlineData: {
+        mimeType: mediaType || "image/jpeg",
+        data: base64,
+      },
+    });
+  }
+
+  const requestBody = JSON.stringify({
+    contents: [{ parts }],
+    generationConfig: {
+      responseMimeType: "application/json",
+    },
+  });
+
+  let lastError = null;
+
+  for (const baseUrl of baseUrls) {
+    for (const model of models) {
+      try {
+        const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${cleanKey}`;
+        const response = await fetchWithTimeout(
+          url,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: requestBody,
+          },
+          timeoutMs
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          const candidate = data?.candidates?.[0];
+          const rawText = candidate?.content?.parts?.[0]?.text;
+          const parsed = extractJson(rawText);
+          if (parsed) {
+            return parsed;
+          }
+          throw new Error("AI returned unparseable nutrition data. Please retry.");
+        }
+
+        const errData = await response.json().catch(() => ({}));
+        const errMsg = errData?.error?.message || response.statusText || `HTTP ${response.status}`;
+        lastError = errMsg;
+
+        if (response.status === 400 && (errMsg.includes("API key not valid") || errMsg.includes("API_KEY_INVALID"))) {
+          throw new Error("Invalid Gemini API key. Please verify your key in Settings/Profile.");
+        }
+        if (response.status === 403) {
+          throw new Error("Gemini API permission denied (403). Ensure Generative Language API is enabled for this key.");
+        }
+        if (response.status === 429) {
+          lastError = "Gemini free tier quota limit reached (429). Please wait 30 seconds before retrying or use another API key in Profile.";
+          console.warn(`Gemini model ${model} rate limited (429), trying fallback model...`);
+          continue; // Try next model immediately
+        }
+        console.warn(`Gemini model ${model} returned ${response.status}:`, errMsg);
+      } catch (err) {
+        if (
+          err.message.includes("Invalid Gemini API key") ||
+          err.message.includes("Gemini API permission denied")
+        ) {
+          throw err;
+        }
+        if (err.name === "AbortError") {
+          console.warn(`Gemini model ${model} timed out after ${timeoutMs}ms, trying next...`);
+          lastError = "AI request timed out. Trying fallback...";
+          continue;
+        }
+        lastError = err.message;
+        // If baseUrl was the proxy and failed with network error, break to direct Google fallback
+        if (baseUrl.includes("/gemini-api")) {
+          break;
+        }
+      }
     }
   }
 
-  // Safe fallback list on v1beta ONLY (never v1)
-  return [
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-    "gemini-2.0-flash",
-    "gemini-1.5-pro",
-  ];
+  if (lastError && (lastError.includes("Failed to fetch") || lastError.includes("NetworkError") || lastError.includes("connection"))) {
+    throw new Error("Network connection error reaching AI service. Please check your internet or Wi-Fi connection.");
+  }
+
+  throw new Error(
+    lastError
+      ? `AI Vision: ${lastError}`
+      : "Could not analyze image with current API key. Check connection or try another model."
+  );
 }
 
 /**
@@ -1341,7 +1430,7 @@ export async function analyzeTextMeal(description, apiKey = "") {
     const claudeModels = ["claude-3-5-sonnet-20241022", "claude-3-7-sonnet-20250219", "claude-3-5-haiku-20241022"];
     for (const model of claudeModels) {
       try {
-        const response = await fetch("https://api.anthropic.com/v1/messages", {
+        const response = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1359,7 +1448,7 @@ export async function analyzeTextMeal(description, apiKey = "") {
               },
             ],
           }),
-        });
+        }, 12000);
 
         if (response.ok) {
           const data = await response.json();
@@ -1379,7 +1468,7 @@ export async function analyzeTextMeal(description, apiKey = "") {
   // 2. OpenAI (Keys starting with "sk-")
   if (cleanKey.startsWith("sk-")) {
     try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1416,41 +1505,20 @@ export async function analyzeTextMeal(description, apiKey = "") {
   }
 
   // 3. Google Gemini API (v1beta)
-  const models = await getAvailableGeminiModels(cleanKey);
-
-  for (const model of models) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: `${TEXT_MEAL_PROMPT}\n\nUser meal description: "${text}"`,
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-          },
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        const parsed = extractJson(rawText);
-        if (parsed) {
-          return reconcileNutritionResult(parsed);
-        }
-      }
-    } catch (err) {
-      continue;
+  try {
+    const parsed = await callGeminiApi({
+      prompt: `${TEXT_MEAL_PROMPT}\n\nUser meal description: "${text}"`,
+      cleanKey,
+      timeoutMs: 10000,
+    });
+    if (parsed) {
+      return reconcileNutritionResult(parsed);
     }
+  } catch (err) {
+    if (err.message.includes("Invalid Gemini API key") || err.message.includes("Gemini API permission denied")) {
+      throw err;
+    }
+    console.warn("Gemini text analysis failed, falling back to offline heuristic parser:", err.message);
   }
 
   // Fallback to offline heuristic parser
@@ -1519,7 +1587,7 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
     let claudeError = null;
     for (const model of claudeModels) {
       try {
-        const response = await fetch("https://api.anthropic.com/v1/messages", {
+        const response = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1547,7 +1615,7 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
               },
             ],
           }),
-        });
+        }, 12000);
 
         if (response.ok) {
           const data = await response.json();
@@ -1579,7 +1647,7 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
   // 2. OpenAI Vision (Keys starting with "sk-" but not "sk-ant")
   if (cleanKey.startsWith("sk-")) {
     try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1603,7 +1671,7 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
             },
           ],
         }),
-      });
+      }, 12000);
 
       if (response.ok) {
         const data = await response.json();
@@ -1628,79 +1696,16 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
     }
   }
 
-  // 3. Google Gemini Vision (Dynamic model discovery via ListModels, v1beta ONLY)
-  const models = await getAvailableGeminiModels(cleanKey);
-  let geminiLastError = null;
+  // 3. Google Gemini Vision (High-speed v1beta with proxy and fallback)
+  const parsed = await callGeminiApi({
+    prompt,
+    base64,
+    mediaType: mediaType || "image/jpeg",
+    cleanKey,
+    timeoutMs: 12000,
+  });
 
-  for (const model of models) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: prompt },
-                {
-                  inlineData: {
-                    mimeType: mediaType || "image/jpeg",
-                    data: base64,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-          },
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const candidate = data?.candidates?.[0];
-        const rawText = candidate?.content?.parts?.[0]?.text;
-        const parsed = extractJson(rawText);
-        if (parsed) {
-          return kind === "photo" ? reconcileNutritionResult(parsed) : formatLabelResult(parsed);
-        }
-      } else {
-        const errData = await response.json().catch(() => ({}));
-        const errMsg = errData?.error?.message || response.statusText || `HTTP ${response.status}`;
-        geminiLastError = errMsg;
-        console.warn(`Gemini model ${model} failed:`, errMsg);
-
-        if (response.status === 400 && (errMsg.includes("API key not valid") || errMsg.includes("API_KEY_INVALID"))) {
-          throw new Error("Invalid Gemini API key. Please verify your key in Settings/Profile.");
-        }
-        if (response.status === 403) {
-          throw new Error("Gemini API permission denied (403). Ensure Generative Language API is enabled for this key.");
-        }
-        if (response.status === 429) {
-          geminiLastError = "Gemini API free tier rate limit reached (429). Google AI Studio limits requests per minute — please wait 30-60 seconds, try another model, or create a fresh key at aistudio.google.com.";
-          console.warn(`Gemini model ${model} rate limited (429), trying fallback model...`);
-          await new Promise((r) => setTimeout(r, 1000));
-          continue;
-        }
-      }
-    } catch (err) {
-      if (
-        err.message.includes("Invalid Gemini API key") ||
-        err.message.includes("Gemini API permission denied")
-      ) {
-        throw err;
-      }
-      geminiLastError = err.message;
-    }
-  }
-
-  throw new Error(
-    geminiLastError
-      ? `AI Vision: ${geminiLastError}`
-      : "Could not analyze image with current API key. Check connection or use manual logging."
-  );
+  return kind === "photo" ? reconcileNutritionResult(parsed) : formatLabelResult(parsed);
 }
 
 /**

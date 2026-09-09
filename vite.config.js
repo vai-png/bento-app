@@ -24,6 +24,13 @@ export default defineConfig({
     host: true, // Listen on all local IP addresses (0.0.0.0)
     port: 5173,
     allowedHosts: true, // Allow tunnel domains and all host headers
+    proxy: {
+      '/gemini-api': {
+        target: 'https://generativelanguage.googleapis.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/gemini-api/, ''),
+      },
+    },
     watch: {
       ignored: ['**/android/**', '**/android/app/**', '**/*.apk'],
     },
