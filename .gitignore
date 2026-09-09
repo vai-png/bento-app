@@ -1,0 +1,59 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules/
+
+# Production builds
+dist/
+dist-ssr/
+build/
+
+# Local env & editor
+.env
+.env.local
+.env.*.local
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Binaries & large archives
+*.apk
+*.aab
+*.zip
+*.tar.gz
+
+# Android caches & build outputs
+android/.gradle/
+android/app/build/
+android/build/
+.gradle/
+local.properties
+*.keystore
+*.jks
+
+# iOS caches & build outputs
+ios/App/Pods/
+ios/App/build/
+ios/App/Podfile.lock
+ios/App/DerivedData/
+
+# Scratch & temporary artifacts
+scratch/
+.tempmediaStorage/
+
+

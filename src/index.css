@@ -1,0 +1,222 @@
+@import "tailwindcss";
+
+/* ── Bento Performance Pro Color System ───────────────────── */
+:root {
+  /* Pitch-Black OLED / Carbon Athletic Dark */
+  --c-canvas:       #040507;
+  --c-card:         #0E1117;
+  --c-card-solid:   #0E1117;
+  --c-card2:        #151922;
+  --c-ink:          #F8FAFC;
+  --c-ink-dim:      #94A3B8;
+  --c-line:         #1F2430;
+  --c-line-strong:  #2D3446;
+  --c-ring-track:   #1A1F2C;
+  --c-modal-overlay:rgba(0, 0, 0, 0.85);
+  --c-modal-card:   #0E1117;
+  --c-input-bg:     #131620;
+  --c-input-border: #262D3D;
+  --c-input-text:   #F8FAFC;
+  --c-nav-bg:       rgba(14, 17, 23, 0.92);
+
+  /* Performance Macro Color Accents (Electric Rose & Pink Bento) */
+  --c-macro-cal:     #F43F8E; /* Electric Rose Pink */
+  --c-macro-cal-dim: rgba(244, 63, 142, 0.14);
+  --c-macro-cal-border: rgba(244, 63, 142, 0.38);
+
+  --c-macro-pro:     #8B5CF6; /* Electric Violet */
+  --c-macro-pro-dim: rgba(139, 92, 246, 0.12);
+  --c-macro-pro-border: rgba(139, 92, 246, 0.35);
+
+  --c-macro-carb:    #F59E0B; /* Citrus Amber */
+  --c-macro-carb-dim:rgba(245, 158, 11, 0.12);
+  --c-macro-carb-border: rgba(245, 158, 11, 0.35);
+
+  --c-macro-fat:     #FB7185; /* Soft Coral Pink */
+  --c-macro-fat-dim: rgba(251, 113, 133, 0.12);
+  --c-macro-fat-border: rgba(251, 113, 133, 0.35);
+
+  --c-macro-water:   #0EA5E9; /* Sky Azure */
+  --c-macro-water-dim: rgba(14, 165, 233, 0.12);
+
+  --c-moss:         #F43F8E;
+  --c-moss-dim:     rgba(244, 63, 142, 0.15);
+  --c-brick:        #F43F5E;
+  --c-brick-dim:    rgba(244, 63, 94, 0.15);
+  --c-plum:         #8B5CF6;
+  --c-plum-dim:     rgba(139, 92, 246, 0.15);
+  --c-ochre:        #F59E0B;
+  --c-ochre-dim:    rgba(245, 158, 11, 0.15);
+  --c-cyan:         #06B6D4;
+  --c-cyan-dim:     rgba(6, 182, 212, 0.15);
+  --c-rose:         #F43F8E;
+  --c-rose-dim:     rgba(244, 63, 142, 0.15);
+  --c-slate:        #38BDF8;
+  --c-slate-dim:    rgba(56, 189, 248, 0.15);
+
+  /* Safe-area insets */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+/* ── Light Mode (Clean Athletic Rose Palette) ──────────── */
+html.light {
+  --c-canvas:       #F9FAFB; /* Clean light canvas */
+  --c-card:         #FFFFFF;
+  --c-card-solid:   #FFFFFF;
+  --c-card2:        #FFF1F5;
+  --c-ink:          #0F172A; /* Slate 900 */
+  --c-ink-dim:      #64748B; /* Slate 500 */
+  --c-line:         #F2E5ED;
+  --c-line-strong:  #E8D3DF;
+  --c-ring-track:   #FCE7F3;
+  --c-modal-overlay:rgba(15, 23, 42, 0.5);
+  --c-modal-card:   #FFFFFF;
+  --c-input-bg:     #FFFFFF;
+  --c-input-border: #FBCFE8;
+  --c-input-text:   #0F172A;
+  --c-nav-bg:       rgba(255, 255, 255, 0.95);
+
+  --c-macro-cal:     #DB2777;
+  --c-macro-cal-dim: #FCE7F3;
+  --c-macro-cal-border: #FBCFE8;
+
+  --c-macro-pro:     #7C3AED;
+  --c-macro-pro-dim: #EDE9FE;
+  --c-macro-pro-border: #DDD6FE;
+
+  --c-macro-carb:    #D97706;
+  --c-macro-carb-dim:#FEF3C7;
+  --c-macro-carb-border: #FDE68A;
+
+  --c-macro-fat:     #E11D48;
+  --c-macro-fat-dim: #FFE4E6;
+  --c-macro-fat-border: #FECDD3;
+
+  --c-macro-water:   #0284C7;
+  --c-macro-water-dim: #E0F2FE;
+
+  --c-moss:         #DB2777;
+  --c-moss-dim:     #FCE7F3;
+  --c-brick:        #E11D48;
+  --c-brick-dim:    #FFE4E6;
+  --c-plum:         #7C3AED;
+  --c-plum-dim:     #EDE9FE;
+  --c-ochre:        #D97706;
+  --c-ochre-dim:    #FEF3C7;
+  --c-cyan:         #0284C7;
+  --c-cyan-dim:     #E0F2FE;
+  --c-rose:         #DB2777;
+  --c-rose-dim:     #FCE7F3;
+  --c-slate:        #0284C7;
+  --c-slate-dim:    #E0F2FE;
+}
+
+/* ── Base ─────────────────────────────────────────────────── */
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
+  }
+  html.light { color-scheme: light; }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--c-canvas);
+    color: var(--c-ink);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+    touch-action: manipulation;
+    overscroll-behavior-y: none;
+  }
+}
+
+/* ── Bento Card Styling ───────────────────────────────────── */
+.bento-card, .glass-card {
+  background: var(--c-card);
+  border: 1px solid var(--c-line);
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.35);
+}
+
+html.light .bento-card, html.light .glass-card {
+  box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.03);
+}
+
+/* ── Performance Macro Glows & Highlights ─────────────────── */
+.glow-pink, .glow-rose, .glow-mint, .glow-emerald {
+  box-shadow: 0 0 24px -4px rgba(244, 63, 142, 0.45);
+}
+.glow-violet {
+  box-shadow: 0 0 24px -4px rgba(139, 92, 246, 0.35);
+}
+.glow-amber {
+  box-shadow: 0 0 24px -4px rgba(245, 158, 11, 0.35);
+}
+.glow-coral {
+  box-shadow: 0 0 24px -4px rgba(244, 63, 94, 0.35);
+}
+
+.glow-pink-lg, .glow-emerald-lg {
+  box-shadow: 0 8px 30px rgba(244, 63, 142, 0.45);
+}
+
+html.light .glow-pink-lg, html.light .glow-emerald-lg {
+  box-shadow: 0 12px 32px rgba(219, 39, 119, 0.25);
+}
+
+/* ── Root layout (Tailored for Nothing CMF Phone 1: 412×915 dp) ── */
+#root {
+  min-height: 100dvh;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  max-width: 428px;
+  width: 100%;
+  margin: 0 auto;
+  position: relative;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 4px; height: 4px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: rgba(148,161,152,0.3); border-radius: 9999px; }
+
+/* ── Input / select colour-scheme & iOS zoom prevention ──── */
+input, select, textarea {
+  color-scheme: dark;
+}
+html.light input,
+html.light select,
+html.light textarea {
+  color-scheme: light;
+}
+
+/* Prevent iOS Safari from auto-zooming into inputs when focused */
+@supports (-webkit-touch-callout: none) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* iOS Touch and Inertial Scrolling */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button, a {
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ios-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+
