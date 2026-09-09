@@ -11,9 +11,14 @@ const FOOD_PHOTO_PROMPT = `You are a professional nutrition estimation assistant
 {"name": string (short description, e.g. "Chicken thali with rice and dal"), "servingLabel": string (e.g. "1 plate", "~350g"), "calories": number, "protein": number, "carbs": number, "fat": number, "fiber": number, "sugar": number, "sodium": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "confidence": "low"|"medium"|"high", "notes": string (one short sentence about estimation uncertainty)}
 If multiple foods are visible, combine them into a single aggregate estimate for the whole plate. Numbers are grams for protein/carbs/fat/fiber/sugar, mg for sodium/potassium/calcium/iron/vitaminC, and kcal for calories. Provide reasonable non-zero estimates for fiber, sodium, potassium, calcium, iron, and vitamin C based on the visible ingredients.`;
 
-const LABEL_PHOTO_PROMPT = `You are a nutrition-label reading assistant. Look at this photo of a packaged food's nutrition facts panel and/or ingredients list. Extract the nutrition per serving and give a plain-language health verdict. Respond with ONLY a JSON object, no markdown fences, no commentary, in exactly this shape:
-{"productName": string, "servingLabel": string, "calories": number, "protein": number, "carbs": number, "fat": number, "sugar": number, "sodium": number, "fiber": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "saturatedFat": number, "verdictLabel": string (short phrase, e.g. "High in added sugar", "Mostly whole ingredients"), "verdictScore": "green"|"yellow"|"red", "reasons": [string, string, string]}
-Base the verdict on standard nutrition heuristics: added sugar, sodium, fiber, protein density, saturated fat, and how processed the ingredient list looks. sodium, potassium, calcium, iron, vitaminC are in mg; everything else in grams except calories (kcal).`;
+const LABEL_PHOTO_PROMPT = `You are an expert nutrition facts reader. Look at this photo of a packaged food nutrition facts panel or ingredients list (which may be in English, European languages like Hungarian/German/French/Spanish, or other languages).
+Extract the nutrition per serving (or per 100g if per-serving is not specified) and provide a concise health verdict.
+European labels use decimal commas (e.g. "2,6 g" means 2.6) - ensure all numbers are properly converted to standard numbers.
+Translate the product name and verdict to English.
+
+Respond with ONLY a JSON object, no markdown fences, no commentary, in exactly this shape:
+{"productName": string, "servingLabel": string, "calories": number, "protein": number, "carbs": number, "fat": number, "sugar": number, "sodium": number, "fiber": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "saturatedFat": number, "verdictLabel": string (e.g. "High Protein", "Low Sugar", "Balanced"), "verdictScore": "green"|"yellow"|"red", "reasons": [string, string, string]}
+Ensure calories, protein, carbs, fat are numbers (not strings).`;
 
 const TEXT_MEAL_PROMPT = `You are a world-class nutrition scientist and sports dietitian specializing in global cuisine and comprehensive Indian diets (North, South, East, West, regional).
 The user will describe what they ate or drank in natural language.
@@ -1243,8 +1248,78 @@ function reconcileNutritionResult(res) {
 }
 
 /**
- * Natural Language AI Meal Analyzer
+ * Safe JSON extractor from LLM text responses
  */
+function extractJson(text) {
+  if (!text) return null;
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch (_) {}
+
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    const slice = text.substring(start, end + 1);
+    try {
+      return JSON.parse(slice);
+    } catch (_) {}
+  }
+  return null;
+}
+
+/**
+ * Discovers available models for a Gemini API key using Google's ListModels endpoint.
+ * Fallback to stable default list on v1beta if ListModels is unavailable.
+ */
+async function getAvailableGeminiModels(cleanKey) {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
+    if (res.ok) {
+      const data = await res.json();
+      const models = data?.models || [];
+      const contentModels = models
+        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+        .map((m) => m.name.replace(/^models\//, ""));
+
+      if (contentModels.length > 0) {
+        // Preferred ordering: gemini-2.0-flash, gemini-1.5-flash, gemini-2.5-flash, gemini-1.5-flash-8b, gemini-1.5-pro, etc.
+        const rank = (name) => {
+          if (name === "gemini-2.0-flash") return 1;
+          if (name.includes("2.0-flash")) return 2;
+          if (name === "gemini-1.5-flash") return 3;
+          if (name.includes("1.5-flash")) return 4;
+          if (name.includes("2.5-flash")) return 5;
+          if (name.includes("1.5-pro")) return 6;
+          return 10;
+        };
+        return contentModels.sort((a, b) => rank(a) - rank(b));
+      }
+    } else {
+      const err = await res.json().catch(() => ({}));
+      const msg = err?.error?.message || "";
+      if (res.status === 400 && (msg.includes("API key not valid") || msg.includes("API_KEY_INVALID"))) {
+        throw new Error("Invalid Gemini API key. Please verify your key in Settings/Profile.");
+      }
+      if (res.status === 403) {
+        throw new Error("Gemini API permission denied (403). Make sure Generative Language API is enabled for this key.");
+      }
+    }
+  } catch (err) {
+    if (err.message.includes("Invalid Gemini API key") || err.message.includes("Gemini API permission denied")) {
+      throw err;
+    }
+  }
+
+  // Safe fallback list on v1beta ONLY (never v1)
+  return [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-pro",
+  ];
+}
+
 /**
  * Natural Language AI Meal Analyzer
  */
@@ -1288,9 +1363,9 @@ export async function analyzeTextMeal(description, apiKey = "") {
         if (response.ok) {
           const data = await response.json();
           const raw = (data.content || []).find((b) => b.type === "text")?.text;
-          if (raw) {
-            const clean = raw.replace(/```json|```/g, "").trim();
-            return reconcileNutritionResult(JSON.parse(clean));
+          const parsed = extractJson(raw);
+          if (parsed) {
+            return reconcileNutritionResult(parsed);
           }
         }
       } catch (err) {
@@ -1328,9 +1403,9 @@ export async function analyzeTextMeal(description, apiKey = "") {
       if (response.ok) {
         const data = await response.json();
         const raw = data?.choices?.[0]?.message?.content;
-        if (raw) {
-          const clean = raw.replace(/```json|```/g, "").trim();
-          return reconcileNutritionResult(JSON.parse(clean));
+        const parsed = extractJson(raw);
+        if (parsed) {
+          return reconcileNutritionResult(parsed);
         }
       }
     } catch (err) {
@@ -1339,47 +1414,41 @@ export async function analyzeTextMeal(description, apiKey = "") {
     return reconcileNutritionResult(parseMealTextOffline(text));
   }
 
-  // 3. Google Gemini API
-  const candidateModels = [
-    "gemini-1.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-pro",
-  ];
+  // 3. Google Gemini API (v1beta)
+  const models = await getAvailableGeminiModels(cleanKey);
 
-  for (const model of candidateModels) {
-    for (const apiVersion of ["v1beta", "v1"]) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${cleanKey}`;
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `${TEXT_MEAL_PROMPT}\n\nUser meal description: "${text}"`,
-                  },
-                ],
-              },
-            ],
-            generationConfig: {
-              responseMimeType: "application/json",
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `${TEXT_MEAL_PROMPT}\n\nUser meal description: "${text}"`,
+                },
+              ],
             },
-          }),
-        });
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+          },
+        }),
+      });
 
-        if (response.ok) {
-          const data = await response.json();
-          const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (rawText) {
-            const clean = rawText.replace(/```json|```/g, "").trim();
-            return reconcileNutritionResult(JSON.parse(clean));
-          }
+      if (response.ok) {
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        const parsed = extractJson(rawText);
+        if (parsed) {
+          return reconcileNutritionResult(parsed);
         }
-      } catch (err) {
-        continue;
       }
+    } catch (err) {
+      continue;
     }
   }
 
@@ -1482,10 +1551,9 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
         if (response.ok) {
           const data = await response.json();
           const raw = (data.content || []).find((b) => b.type === "text")?.text;
-          if (raw) {
-            const clean = raw.replace(/```json|```/g, "").trim();
-            const parsed = JSON.parse(clean);
-            return kind === "photo" ? reconcileNutritionResult(parsed) : parsed;
+          const parsed = extractJson(raw);
+          if (parsed) {
+            return kind === "photo" ? reconcileNutritionResult(parsed) : formatLabelResult(parsed);
           }
         } else {
           const errData = await response.json().catch(() => ({}));
@@ -1539,10 +1607,9 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
       if (response.ok) {
         const data = await response.json();
         const raw = data?.choices?.[0]?.message?.content;
-        if (raw) {
-          const clean = raw.replace(/```json|```/g, "").trim();
-          const parsed = JSON.parse(clean);
-          return kind === "photo" ? reconcileNutritionResult(parsed) : parsed;
+        const parsed = extractJson(raw);
+        if (parsed) {
+          return kind === "photo" ? reconcileNutritionResult(parsed) : formatLabelResult(parsed);
         }
       } else {
         const errData = await response.json().catch(() => ({}));
@@ -1560,76 +1627,69 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
     }
   }
 
-  // 3. Google Gemini Vision (Default for AIzaSy... or standard Google AI Studio keys)
-  const candidateModels = [
-    "gemini-1.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-pro",
-  ];
-
+  // 3. Google Gemini Vision (Dynamic model discovery via ListModels, v1beta ONLY)
+  const models = await getAvailableGeminiModels(cleanKey);
   let geminiLastError = null;
 
-  for (const model of candidateModels) {
-    for (const apiVersion of ["v1beta", "v1"]) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${cleanKey}`;
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: prompt },
-                  {
-                    inlineData: {
-                      mimeType: mediaType || "image/jpeg",
-                      data: base64,
-                    },
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                {
+                  inlineData: {
+                    mimeType: mediaType || "image/jpeg",
+                    data: base64,
                   },
-                ],
-              },
-            ],
-            generationConfig: {
-              responseMimeType: "application/json",
+                },
+              ],
             },
-          }),
-        });
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+          },
+        }),
+      });
 
-        if (response.ok) {
-          const data = await response.json();
-          const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (rawText) {
-            const clean = rawText.replace(/```json|```/g, "").trim();
-            const parsed = JSON.parse(clean);
-            return kind === "photo" ? reconcileNutritionResult(parsed) : parsed;
-          }
-        } else {
-          const errData = await response.json().catch(() => ({}));
-          const errMsg = errData?.error?.message || response.statusText || `HTTP ${response.status}`;
-          geminiLastError = errMsg;
-          console.warn(`Gemini model ${model} (${apiVersion}) failed:`, errMsg);
+      if (response.ok) {
+        const data = await response.json();
+        const candidate = data?.candidates?.[0];
+        const rawText = candidate?.content?.parts?.[0]?.text;
+        const parsed = extractJson(rawText);
+        if (parsed) {
+          return kind === "photo" ? reconcileNutritionResult(parsed) : formatLabelResult(parsed);
+        }
+      } else {
+        const errData = await response.json().catch(() => ({}));
+        const errMsg = errData?.error?.message || response.statusText || `HTTP ${response.status}`;
+        geminiLastError = errMsg;
+        console.warn(`Gemini model ${model} failed:`, errMsg);
 
-          if (response.status === 400 && (errMsg.includes("API key not valid") || errMsg.includes("API_KEY_INVALID"))) {
-            throw new Error("Invalid Gemini API key. Please verify your key in Settings/Profile.");
-          }
-          if (response.status === 403) {
-            throw new Error("Gemini API permission denied (403). Ensure Generative Language API is enabled for this key.");
-          }
-          if (response.status === 429) {
-            throw new Error("Gemini API rate limit or quota exceeded (429). Please wait a moment.");
-          }
+        if (response.status === 400 && (errMsg.includes("API key not valid") || errMsg.includes("API_KEY_INVALID"))) {
+          throw new Error("Invalid Gemini API key. Please verify your key in Settings/Profile.");
         }
-      } catch (err) {
-        if (
-          err.message.includes("Invalid Gemini API key") ||
-          err.message.includes("Gemini API permission denied") ||
-          err.message.includes("Gemini API rate limit")
-        ) {
-          throw err;
+        if (response.status === 403) {
+          throw new Error("Gemini API permission denied (403). Ensure Generative Language API is enabled for this key.");
         }
-        geminiLastError = err.message;
+        if (response.status === 429) {
+          throw new Error("Gemini API rate limit or quota exceeded (429). Please wait a moment.");
+        }
       }
+    } catch (err) {
+      if (
+        err.message.includes("Invalid Gemini API key") ||
+        err.message.includes("Gemini API permission denied") ||
+        err.message.includes("Gemini API rate limit")
+      ) {
+        throw err;
+      }
+      geminiLastError = err.message;
     }
   }
 
@@ -1638,4 +1698,29 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
       ? `AI Vision failed (${geminiLastError}). Check your API key or use manual logging.`
       : "Could not analyze image with current API key. Check connection or use manual logging."
   );
+}
+
+/**
+ * Standardize and clean label extraction results
+ */
+function formatLabelResult(parsed) {
+  return {
+    productName: parsed.productName || "Scanned Food Item",
+    servingLabel: parsed.servingLabel || "1 serving",
+    calories: typeof parsed.calories === "number" ? parsed.calories : parseFloat(parsed.calories) || 0,
+    protein: typeof parsed.protein === "number" ? parsed.protein : parseFloat(parsed.protein) || 0,
+    carbs: typeof parsed.carbs === "number" ? parsed.carbs : parseFloat(parsed.carbs) || 0,
+    fat: typeof parsed.fat === "number" ? parsed.fat : parseFloat(parsed.fat) || 0,
+    fiber: typeof parsed.fiber === "number" ? parsed.fiber : parseFloat(parsed.fiber) || 0,
+    sugar: typeof parsed.sugar === "number" ? parsed.sugar : parseFloat(parsed.sugar) || 0,
+    sodium: typeof parsed.sodium === "number" ? parsed.sodium : parseFloat(parsed.sodium) || 0,
+    saturatedFat: typeof parsed.saturatedFat === "number" ? parsed.saturatedFat : parseFloat(parsed.saturatedFat) || 0,
+    potassium: typeof parsed.potassium === "number" ? parsed.potassium : parseFloat(parsed.potassium) || 0,
+    calcium: typeof parsed.calcium === "number" ? parsed.calcium : parseFloat(parsed.calcium) || 0,
+    iron: typeof parsed.iron === "number" ? parsed.iron : parseFloat(parsed.iron) || 0,
+    vitaminC: typeof parsed.vitaminC === "number" ? parsed.vitaminC : parseFloat(parsed.vitaminC) || 0,
+    verdictLabel: parsed.verdictLabel || "Nutrition Analyzed",
+    verdictScore: ["green", "yellow", "red"].includes(parsed.verdictScore) ? parsed.verdictScore : "green",
+    reasons: Array.isArray(parsed.reasons) && parsed.reasons.length > 0 ? parsed.reasons : ["Nutrition values extracted from packaging."],
+  };
 }
