@@ -27,8 +27,8 @@ A high-performance, mobile-first nutrition and adaptive macro tracking progressi
 
 ```bash
 # Clone repository
-git clone https://github.com/<your-username>/bento.git
-cd bento
+git clone https://github.com/vai-png/bento-app.git
+cd bento-app
 
 # Install dependencies
 npm install
