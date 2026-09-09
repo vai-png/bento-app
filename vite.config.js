@@ -23,6 +23,7 @@ export default defineConfig({
   server: {
     host: true, // Listen on all local IP addresses (0.0.0.0)
     port: 5173,
+    allowedHosts: true, // Allow tunnel domains and all host headers
     watch: {
       ignored: ['**/android/**', '**/android/app/**', '**/*.apk'],
     },
