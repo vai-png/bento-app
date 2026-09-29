@@ -8,8 +8,8 @@
  */
 
 const FOOD_PHOTO_PROMPT = `You are a professional nutrition estimation assistant specializing in global and Indian cuisine. Look at this photo of a meal or food item and estimate its complete macronutrient and key micronutrient profile based on visible portion size and typical preparation (including ghee, oil, tadka, dal, rice, roti, sabzi). Respond with ONLY a JSON object, no markdown fences, no commentary, in exactly this shape:
-{"name": string (short description, e.g. "Chicken thali with rice and dal"), "servingLabel": string (e.g. "1 plate", "~350g"), "calories": number, "protein": number, "carbs": number, "fat": number, "fiber": number, "sugar": number, "sodium": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "confidence": "low"|"medium"|"high", "notes": string (one short sentence about estimation uncertainty)}
-If multiple foods are visible, combine them into a single aggregate estimate for the whole plate. Numbers are grams for protein/carbs/fat/fiber/sugar, mg for sodium/potassium/calcium/iron/vitaminC, and kcal for calories. Provide reasonable non-zero estimates for fiber, sodium, potassium, calcium, iron, and vitamin C based on the visible ingredients.`;
+{"name": string (short description, e.g. "Chicken thali with rice and dal"), "servingLabel": string (e.g. "1 plate", "~350g"), "calories": number, "protein": number, "carbs": number, "fat": number, "fiber": number, "sugar": number, "addedSugar": number, "sodium": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "confidence": "low"|"medium"|"high", "notes": string (one short sentence about estimation uncertainty)}
+If multiple foods are visible, combine them into a single aggregate estimate for the whole plate. Numbers are grams for protein/carbs/fat/fiber/sugar/addedSugar, mg for sodium/potassium/calcium/iron/vitaminC, and kcal for calories. IMPORTANT: "sugar" is Total Sugars; "addedSugar" is strictly Added/Free Sugars (must be 0 for whole fruits, vegetables, unflavored milk/curd, plain grains, plain meats/eggs; only count sugar, honey, syrups, jaggery, or sweetened sauces added during cooking or in desserts). addedSugar must never exceed sugar. Provide reasonable non-zero estimates for fiber, sodium, potassium, calcium, iron, and vitamin C based on the visible ingredients.`;
 
 const LABEL_PHOTO_PROMPT = `You are an expert nutrition facts reader. Look at this photo of a packaged food nutrition facts panel or ingredients list (which may be in English, European languages like Hungarian/German/French/Spanish, or other languages).
 Extract the nutrition per serving (or per 100g if per-serving is not specified) and provide a concise health verdict.
@@ -17,8 +17,8 @@ European labels use decimal commas (e.g. "2,6 g" means 2.6) - ensure all numbers
 Translate the product name and verdict to English.
 
 Respond with ONLY a JSON object, no markdown fences, no commentary, in exactly this shape:
-{"productName": string, "servingLabel": string, "calories": number, "protein": number, "carbs": number, "fat": number, "sugar": number, "sodium": number, "fiber": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "saturatedFat": number, "verdictLabel": string (e.g. "High Protein", "Low Sugar", "Balanced"), "verdictScore": "green"|"yellow"|"red", "reasons": [string, string, string]}
-Ensure calories, protein, carbs, fat are numbers (not strings).`;
+{"productName": string, "servingLabel": string, "calories": number, "protein": number, "carbs": number, "fat": number, "sugar": number, "addedSugar": number, "sodium": number, "fiber": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "saturatedFat": number, "verdictLabel": string (e.g. "High Protein", "Low Sugar", "Balanced"), "verdictScore": "green"|"yellow"|"red", "reasons": [string, string, string]}
+Ensure calories, protein, carbs, fat, sugar, addedSugar are numbers (not strings). If the label specifies "Includes Xg Added Sugars", set addedSugar to X. If added sugars are not specified and the item is an unsweetened whole food, set addedSugar to 0. addedSugar must not exceed sugar.`;
 
 const TEXT_MEAL_PROMPT = `You are a world-class nutrition scientist and sports dietitian specializing in global cuisine and comprehensive Indian diets (North, South, East, West, regional).
 The user will describe what they ate or drank in natural language.
@@ -40,11 +40,15 @@ CRITICAL PRECISION & MATHEMATICAL CONSISTENCY RULES:
      * 1 tsp cooking oil / ghee (5g): 45 kcal, 5g fat; 1 tbsp (14g): 125 kcal, 14g fat.
 3. ITEMIZATION IN NOTES:
    - In "notes", provide a clear itemized breakdown of detected foods and their calculated calories and macros (e.g. "150g Chicken: 248 kcal, 46g P | 200g Rice: 260 kcal, 5g P, 56g C | 100g Curd: 60 kcal, 3g P").
-4. ACCURATE MICRONUTRIENTS:
-   - Fiber (g), Sugar (g), Sodium (mg), Potassium (mg), Calcium (mg), Iron (mg), Vitamin C (mg). Provide realistic non-zero estimates based on ingredients.
+4. ACCURATE SUGARS & MICRONUTRIENTS:
+   - Differentiate Total Sugar ("sugar") and Added Sugar ("addedSugar").
+   - Whole natural foods (fruits like apple, banana, orange; unflavored dairy like milk, curd, plain dahi; plain rice, oats, rotis, vegetables) have 0g Added Sugar (all sugar is intrinsic/natural).
+   - "addedSugar" should strictly count added refined sugar, jaggery, honey, syrups, confectionery, sweets, soda, sweetened drinks, and desserts.
+   - Always ensure 0 <= addedSugar <= sugar.
+   - Provide realistic non-zero estimates for fiber (g), sodium (mg), potassium (mg), calcium (mg), iron (mg), and vitamin C (mg).
 
 Respond with ONLY a JSON object, no markdown fences, no commentary, in exactly this shape:
-{"name": string, "servingLabel": string, "calories": number, "protein": number, "carbs": number, "fat": number, "fiber": number, "sugar": number, "sodium": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "confidence": "high"|"medium"|"low", "notes": string}`;
+{"name": string, "servingLabel": string, "calories": number, "protein": number, "carbs": number, "fat": number, "fiber": number, "sugar": number, "addedSugar": number, "sodium": number, "potassium": number, "calcium": number, "iron": number, "vitaminC": number, "confidence": "high"|"medium"|"low", "notes": string}`;
 
 export function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -844,7 +848,7 @@ const FOOD_DATABASE = [
     cupGrams: 150,
     isGramItem: true,
     defaultCount: 1.5,
-    cal: 65, p: 3.3, c: 4, f: 3.3, fib: 0, sug: 4, sod: 36, pot: 140, calc: 120, fe: 0.1, vitc: 0,
+    cal: 65, p: 3.3, c: 4, f: 3.3, fib: 0, sug: 4, addedSug: 0, sod: 36, pot: 140, calc: 120, fe: 0.1, vitc: 0,
   },
   {
     regex: /(?:raita|boondi raita|cucumber raita)/i,
@@ -853,7 +857,7 @@ const FOOD_DATABASE = [
     bowlGrams: 120,
     isGramItem: true,
     defaultCount: 1.2,
-    cal: 100, p: 3.3, c: 6.7, f: 5, fib: 0.4, sug: 3.5, sod: 183, pot: 158, calc: 125, fe: 0.2, vitc: 1.6,
+    cal: 100, p: 3.3, c: 6.7, f: 5, fib: 0.4, sug: 3.5, addedSug: 0, sod: 183, pot: 158, calc: 125, fe: 0.2, vitc: 1.6,
   },
   {
     regex: /(?:chaas|chach|buttermilk|masala chaas)/i,
@@ -861,7 +865,7 @@ const FOOD_DATABASE = [
     baseGrams: 100,
     glassGrams: 200,
     defaultCount: 2,
-    cal: 25, p: 1.2, c: 2, f: 1, fib: 0, sug: 2, sod: 80, pot: 70, calc: 60, fe: 0.1, vitc: 0,
+    cal: 25, p: 1.2, c: 2, f: 1, fib: 0, sug: 2, addedSug: 0, sod: 80, pot: 70, calc: 60, fe: 0.1, vitc: 0,
   },
   {
     regex: /(?:lassi|sweet lassi|mango lassi)/i,
@@ -869,7 +873,7 @@ const FOOD_DATABASE = [
     baseGrams: 100,
     glassGrams: 250,
     defaultCount: 2.5,
-    cal: 96, p: 2.4, c: 14.4, f: 3.2, fib: 0, sug: 14, sod: 38, pot: 112, calc: 88, fe: 0.1, vitc: 0.8,
+    cal: 96, p: 2.4, c: 14.4, f: 3.2, fib: 0, sug: 14, addedSug: 10, sod: 38, pot: 112, calc: 88, fe: 0.1, vitc: 0.8,
   },
   {
     regex: /(?:masala chai|adrak chai|ginger tea|chai|tea|cup of chai)/i,
@@ -877,7 +881,7 @@ const FOOD_DATABASE = [
     baseGrams: 100,
     cupGrams: 150,
     defaultCount: 1.5,
-    cal: 63, p: 1.7, c: 9.3, f: 2.3, fib: 0, sug: 9, sod: 30, pot: 80, calc: 56, fe: 0.1, vitc: 0,
+    cal: 63, p: 1.7, c: 9.3, f: 2.3, fib: 0, sug: 9, addedSug: 7, sod: 30, pot: 80, calc: 56, fe: 0.1, vitc: 0,
   },
   {
     regex: /(?:filter coffee|south indian coffee)/i,
@@ -885,7 +889,7 @@ const FOOD_DATABASE = [
     baseGrams: 100,
     cupGrams: 150,
     defaultCount: 1.5,
-    cal: 60, p: 1.7, c: 8, f: 2.3, fib: 0, sug: 7.5, sod: 30, pot: 86, calc: 53, fe: 0.1, vitc: 0,
+    cal: 60, p: 1.7, c: 8, f: 2.3, fib: 0, sug: 7.5, addedSug: 6, sod: 30, pot: 86, calc: 53, fe: 0.1, vitc: 0,
   },
   {
     regex: /(?:ghee|spoon of ghee|tbsp ghee|tsp ghee)/i,
@@ -975,7 +979,7 @@ const FOOD_DATABASE = [
     baseGrams: 50,
     unitGrams: 50,
     defaultCount: 2,
-    cal: 75, p: 2.5, c: 12, f: 2, fib: 1, sug: 2, sod: 190, pot: 45, calc: 12, fe: 0.5, vitc: 0.5,
+    cal: 75, p: 2.5, c: 12, f: 2, fib: 1, sug: 2, addedSug: 1.5, sod: 190, pot: 45, calc: 12, fe: 0.5, vitc: 0.5,
   },
   {
     regex: /(?:pani puri|golgappa|puchka)/i,
@@ -983,7 +987,7 @@ const FOOD_DATABASE = [
     baseGrams: 150,
     unitGrams: 25,
     defaultCount: 6,
-    cal: 32, p: 0.5, c: 5.7, f: 0.75, fib: 0.5, sug: 1, sod: 60, pot: 23, calc: 3, fe: 0.2, vitc: 1.3,
+    cal: 32, p: 0.5, c: 5.7, f: 0.75, fib: 0.5, sug: 1, addedSug: 0.5, sod: 60, pot: 23, calc: 3, fe: 0.2, vitc: 1.3,
   },
   {
     regex: /(?:gulab jamun)/i,
@@ -991,7 +995,7 @@ const FOOD_DATABASE = [
     baseGrams: 45,
     unitGrams: 45,
     defaultCount: 1,
-    cal: 150, p: 2.5, c: 24, f: 5.5, fib: 0.5, sug: 20, sod: 45, pot: 40, calc: 55, fe: 0.3, vitc: 0,
+    cal: 150, p: 2.5, c: 24, f: 5.5, fib: 0.5, sug: 20, addedSug: 19, sod: 45, pot: 40, calc: 55, fe: 0.3, vitc: 0,
   },
   {
     regex: /(?:rasgulla)/i,
@@ -999,7 +1003,7 @@ const FOOD_DATABASE = [
     baseGrams: 45,
     unitGrams: 45,
     defaultCount: 1,
-    cal: 120, p: 3, c: 22, f: 2, fib: 0, sug: 18, sod: 30, pot: 35, calc: 65, fe: 0.2, vitc: 0,
+    cal: 120, p: 3, c: 22, f: 2, fib: 0, sug: 18, addedSug: 17, sod: 30, pot: 35, calc: 65, fe: 0.2, vitc: 0,
   },
   {
     regex: /(?:kheer|payasam)/i,
@@ -1008,7 +1012,7 @@ const FOOD_DATABASE = [
     bowlGrams: 160,
     isGramItem: true,
     defaultCount: 1.6,
-    cal: 150, p: 3.1, c: 21, f: 5.3, fib: 0.3, sug: 16, sod: 47, pot: 118, calc: 100, fe: 0.2, vitc: 0,
+    cal: 150, p: 3.1, c: 21, f: 5.3, fib: 0.3, sug: 16, addedSug: 12, sod: 47, pot: 118, calc: 100, fe: 0.2, vitc: 0,
   },
   {
     regex: /(?:halwa|gajar halwa|sooji halwa)/i,
@@ -1017,7 +1021,7 @@ const FOOD_DATABASE = [
     bowlGrams: 130,
     isGramItem: true,
     defaultCount: 1.3,
-    cal: 240, p: 3.5, c: 32, f: 11, fib: 1.5, sug: 22, sod: 65, pot: 138, calc: 54, fe: 0.7, vitc: 2.3,
+    cal: 240, p: 3.5, c: 32, f: 11, fib: 1.5, sug: 22, addedSug: 20, sod: 65, pot: 138, calc: 54, fe: 0.7, vitc: 2.3,
   },
 
   // 9. Global Health & Fitness Staples
@@ -1094,7 +1098,7 @@ const FOOD_DATABASE = [
     baseGrams: 118,
     unitGrams: 118,
     defaultCount: 1,
-    cal: 105, p: 1.3, c: 27, f: 0.3, fib: 3.1, sug: 14.4, sod: 1, pot: 420, calc: 6, fe: 0.3, vitc: 10,
+    cal: 105, p: 1.3, c: 27, f: 0.3, fib: 3.1, sug: 14.4, addedSug: 0, sod: 1, pot: 420, calc: 6, fe: 0.3, vitc: 10,
   },
   {
     regex: /(?:apple)/i,
@@ -1102,7 +1106,7 @@ const FOOD_DATABASE = [
     baseGrams: 180,
     unitGrams: 180,
     defaultCount: 1,
-    cal: 95, p: 0.5, c: 25, f: 0.3, fib: 4.4, sug: 19, sod: 2, pot: 195, calc: 11, fe: 0.2, vitc: 8,
+    cal: 95, p: 0.5, c: 25, f: 0.3, fib: 4.4, sug: 19, addedSug: 0, sod: 2, pot: 195, calc: 11, fe: 0.2, vitc: 8,
   },
   {
     regex: /(?:milk|cup of milk|glass of milk)/i,
@@ -1111,7 +1115,7 @@ const FOOD_DATABASE = [
     glassGrams: 250,
     cupGrams: 200,
     defaultCount: 2.5,
-    cal: 60, p: 3.2, c: 4.8, f: 3.2, fib: 0, sug: 4.8, sod: 42, pot: 144, calc: 116, fe: 0.1, vitc: 0,
+    cal: 60, p: 3.2, c: 4.8, f: 3.2, fib: 0, sug: 4.8, addedSug: 0, sod: 42, pot: 144, calc: 116, fe: 0.1, vitc: 0,
   },
   {
     regex: /(?:oats|oatmeal|porridge)/i,
@@ -1163,6 +1167,7 @@ export function parseMealTextOffline(text) {
   let fat = 0;
   let fiber = 0;
   let sugar = 0;
+  let addedSugar = 0;
   let sodium = 0;
   let potassium = 0;
   let calcium = 0;
@@ -1181,6 +1186,7 @@ export function parseMealTextOffline(text) {
       fat += item.f * mult;
       fiber += (item.fib || 0) * mult;
       sugar += (item.sug || 0) * mult;
+      addedSugar += (item.addedSug !== undefined ? item.addedSug : 0) * mult;
       sodium += (item.sod || 0) * mult;
       potassium += (item.pot || 0) * mult;
       calcium += (item.calc || 0) * mult;
@@ -1199,6 +1205,7 @@ export function parseMealTextOffline(text) {
     fat = 12;
     fiber = 6;
     sugar = 4;
+    addedSugar = 0;
     sodium = 420;
     potassium = 380;
     calcium = 95;
@@ -1209,6 +1216,9 @@ export function parseMealTextOffline(text) {
   const cleanTitle = text.length > 55 ? text.slice(0, 52) + "…" : text;
   const formattedName = cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1);
 
+  const roundedSugar = Math.round(sugar * 10) / 10;
+  const roundedAddedSugar = Math.max(0, Math.min(roundedSugar, Math.round(addedSugar * 10) / 10));
+
   return {
     name: formattedName,
     servingLabel: detectedItems.length > 0 ? detectedItems.join(" + ") : "1 serving",
@@ -1217,7 +1227,8 @@ export function parseMealTextOffline(text) {
     carbs: Math.round(carbs * 10) / 10,
     fat: Math.round(fat * 10) / 10,
     fiber: Math.round(fiber * 10) / 10,
-    sugar: Math.round(sugar * 10) / 10,
+    sugar: roundedSugar,
+    addedSugar: roundedAddedSugar,
     sodium: Math.round(sodium),
     potassium: Math.round(potassium),
     calcium: Math.round(calcium),
@@ -1235,6 +1246,13 @@ function reconcileNutritionResult(res) {
   const p = Math.max(0, parseFloat(res.protein) || 0);
   const c = Math.max(0, parseFloat(res.carbs) || 0);
   const f = Math.max(0, parseFloat(res.fat) || 0);
+  const totalSug = Math.max(0, parseFloat(res.sugar) || 0);
+  let addedSug = res.addedSugar !== undefined && res.addedSugar !== null
+    ? Math.max(0, parseFloat(res.addedSugar) || 0)
+    : 0;
+  if (addedSug > totalSug) {
+    addedSug = totalSug;
+  }
   const macroCals = Math.round(p * 4 + c * 4 + f * 9);
   const rawCals = Math.round(parseFloat(res.calories) || 0);
   const finalCals = rawCals > 0 && Math.abs(rawCals - macroCals) <= Math.max(15, rawCals * 0.12) ? rawCals : macroCals;
@@ -1244,6 +1262,9 @@ function reconcileNutritionResult(res) {
     protein: Math.round(p * 10) / 10,
     carbs: Math.round(c * 10) / 10,
     fat: Math.round(f * 10) / 10,
+    fiber: Math.round((parseFloat(res.fiber) || 0) * 10) / 10,
+    sugar: Math.round(totalSug * 10) / 10,
+    addedSugar: Math.round(addedSug * 10) / 10,
   };
 }
 
@@ -1579,6 +1600,7 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
         fat: 22,
         fiber: 9.5,
         sugar: 4,
+        addedSugar: 0,
         sodium: 680,
         potassium: 540,
         calcium: 380,
@@ -1597,6 +1619,7 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
         fat: 0.5,
         fiber: 0,
         sugar: 4,
+        addedSugar: 0,
         sodium: 45,
         saturatedFat: 0.2,
         potassium: 160,
@@ -1747,6 +1770,12 @@ export async function analyzeImage(base64, mediaType, kind, apiKey = "") {
  * Standardize and clean label extraction results
  */
 function formatLabelResult(parsed) {
+  const sugar = typeof parsed.sugar === "number" ? parsed.sugar : parseFloat(parsed.sugar) || 0;
+  let addedSugar = parsed.addedSugar !== undefined && parsed.addedSugar !== null
+    ? (typeof parsed.addedSugar === "number" ? parsed.addedSugar : parseFloat(parsed.addedSugar) || 0)
+    : 0;
+  if (addedSugar > sugar) addedSugar = sugar;
+
   return {
     productName: parsed.productName || "Scanned Food Item",
     servingLabel: parsed.servingLabel || "1 serving",
@@ -1755,7 +1784,8 @@ function formatLabelResult(parsed) {
     carbs: typeof parsed.carbs === "number" ? parsed.carbs : parseFloat(parsed.carbs) || 0,
     fat: typeof parsed.fat === "number" ? parsed.fat : parseFloat(parsed.fat) || 0,
     fiber: typeof parsed.fiber === "number" ? parsed.fiber : parseFloat(parsed.fiber) || 0,
-    sugar: typeof parsed.sugar === "number" ? parsed.sugar : parseFloat(parsed.sugar) || 0,
+    sugar: Math.round(sugar * 10) / 10,
+    addedSugar: Math.round(Math.max(0, addedSugar) * 10) / 10,
     sodium: typeof parsed.sodium === "number" ? parsed.sodium : parseFloat(parsed.sodium) || 0,
     saturatedFat: typeof parsed.saturatedFat === "number" ? parsed.saturatedFat : parseFloat(parsed.saturatedFat) || 0,
     potassium: typeof parsed.potassium === "number" ? parsed.potassium : parseFloat(parsed.potassium) || 0,
@@ -1767,3 +1797,22 @@ function formatLabelResult(parsed) {
     reasons: Array.isArray(parsed.reasons) && parsed.reasons.length > 0 ? parsed.reasons : ["Nutrition values extracted from packaging."],
   };
 }
+
+export const POPULAR_STAPLES = [
+  { id: "staple-apple", name: "Apple", servingLabel: "1 medium (180g)", calories: 95, protein: 0.5, carbs: 25, fat: 0.3, fiber: 4.4, sugar: 19, addedSugar: 0, category: "Fruits" },
+  { id: "staple-banana", name: "Banana", servingLabel: "1 medium (118g)", calories: 105, protein: 1.3, carbs: 27, fat: 0.3, fiber: 3.1, sugar: 14.4, addedSugar: 0, category: "Fruits" },
+  { id: "staple-egg", name: "Boiled Egg", servingLabel: "1 large (50g)", calories: 74, protein: 6.3, carbs: 0.4, fat: 5, fiber: 0, sugar: 0.4, addedSugar: 0, category: "Protein" },
+  { id: "staple-chicken", name: "Grilled Chicken Breast", servingLabel: "100g", calories: 165, protein: 31, carbs: 0, fat: 3.6, fiber: 0, sugar: 0, addedSugar: 0, category: "Protein" },
+  { id: "staple-paneer", name: "Raw Paneer", servingLabel: "100g", calories: 260, protein: 18, carbs: 4, fat: 20, fiber: 0, sugar: 2, addedSugar: 0, category: "Protein" },
+  { id: "staple-whey", name: "Whey Protein", servingLabel: "1 scoop (30g)", calories: 120, protein: 24, carbs: 2, fat: 1.5, fiber: 0.5, sugar: 1, addedSugar: 0, category: "Protein" },
+  { id: "staple-roti", name: "Whole Wheat Roti", servingLabel: "1 roti (35g)", calories: 105, protein: 3.2, carbs: 21, fat: 1.5, fiber: 2.5, sugar: 0.3, addedSugar: 0, category: "Grains" },
+  { id: "staple-rice", name: "Steamed White Rice", servingLabel: "1 katori (150g)", calories: 195, protein: 4, carbs: 42, fat: 0.5, fiber: 0.6, sugar: 0.1, addedSugar: 0, category: "Grains" },
+  { id: "staple-oats", name: "Rolled Oatmeal", servingLabel: "1 bowl (40g dry)", calories: 155, protein: 5.5, carbs: 26.5, fat: 2.8, fiber: 4, sugar: 0.5, addedSugar: 0, category: "Grains" },
+  { id: "staple-dal", name: "Dal Tadka", servingLabel: "1 katori (150g)", calories: 135, protein: 7.5, carbs: 18, fat: 4, fiber: 4.5, sugar: 1.2, addedSugar: 0, category: "Meals" },
+  { id: "staple-dahi", name: "Curd / Dahi", servingLabel: "1 katori (150g)", calories: 98, protein: 5, carbs: 6, fat: 5, fiber: 0, sugar: 6, addedSugar: 0, category: "Dairy" },
+  { id: "staple-milk", name: "Cow Milk", servingLabel: "1 glass (250ml)", calories: 150, protein: 8, carbs: 12, fat: 8, fiber: 0, sugar: 12, addedSugar: 0, category: "Dairy" },
+  { id: "staple-almonds", name: "Almonds / Mixed Nuts", servingLabel: "1 handful (28g)", calories: 160, protein: 6, carbs: 6, fat: 14, fiber: 3.5, sugar: 1.2, addedSugar: 0, category: "Snacks" },
+  { id: "staple-chai", name: "Masala Chai with Sugar", servingLabel: "1 cup (150ml)", calories: 95, protein: 2.5, carbs: 14, fat: 3.5, fiber: 0, sugar: 13.5, addedSugar: 10.5, category: "Drinks" },
+];
+
+export { FOOD_DATABASE };

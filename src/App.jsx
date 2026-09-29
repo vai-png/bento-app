@@ -68,7 +68,13 @@ import {
   ACTIVITY_LABELS,
   computeUserStreak,
 } from "./utils/nutrition.js";
-import { fileToOptimizedImage, fileToBase64, analyzeImage, analyzeTextMeal } from "./utils/visionApi.js";
+import {
+  fileToOptimizedImage,
+  fileToBase64,
+  analyzeImage,
+  analyzeTextMeal,
+  POPULAR_STAPLES,
+} from "./utils/visionApi.js";
 
 /* ---------------------------------------------------------------- */
 /* Meal Configurations                                               */
@@ -81,6 +87,14 @@ const MEAL_CONFIG = {
   Dinner: { emoji: "🍲", label: "Dinner" },
   Snacks: { emoji: "🍎", label: "Snacks" },
 };
+
+function getDefaultMealForTime() {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 11) return "Breakfast";
+  if (hour >= 11 && hour < 16) return "Lunch";
+  if (hour >= 16 && hour < 19) return "Snacks";
+  return "Dinner";
+}
 
 const DEFAULT_USER_PROFILE = {
   displayName: "Athlete",
@@ -429,9 +443,12 @@ function MicronutrientSummaryCard({
   onAddWater,
   onOpenDetails,
 }) {
+  const addedSugarVal = totals.addedSugar ?? 0;
+  const naturalSugarVal = Math.max(0, (totals.sugar || 0) - addedSugarVal);
+
   const fiberEval = evaluateNutrientStatus("fiber", totals.fiber, targets.fiber);
   const sodiumEval = evaluateNutrientStatus("sodiumLimit", totals.sodium, targets.sodiumLimit);
-  const sugarEval = evaluateNutrientStatus("sugarLimit", totals.sugar, targets.sugarLimit);
+  const sugarEval = evaluateNutrientStatus("sugarLimit", addedSugarVal, targets.sugarLimit);
   const vitCEval = evaluateNutrientStatus("vitaminC", totals.vitaminC, targets.vitaminC);
 
   const waterPct = Math.min(100, Math.round((waterMl / (targets.water || 3000)) * 100));
@@ -504,7 +521,7 @@ function MicronutrientSummaryCard({
           <p className="text-[10px] mt-0.5" style={{ color: "var(--c-ink-dim)" }}>{sodiumEval.diffText}</p>
         </div>
 
-        {/* Sugar */}
+        {/* Added Sugar */}
         <div className={`p-2.5 rounded-2xl border ${sugarEval.border} ${sugarEval.bg}`}>
           <div className="flex justify-between items-center">
             <span
@@ -518,12 +535,17 @@ function MicronutrientSummaryCard({
             </span>
           </div>
           <div className="text-sm font-extrabold mt-1" style={{ color: "var(--c-ink)" }}>
-            {Math.round(totals.sugar)}g{" "}
+            {Math.round(addedSugarVal)}g{" "}
             <span className="text-[10px] font-normal" style={{ color: "var(--c-ink-dim)" }}>
               / {targets.sugarLimit}g
             </span>
           </div>
-          <p className="text-[10px] mt-0.5" style={{ color: "var(--c-ink-dim)" }}>{sugarEval.diffText}</p>
+          <div className="flex items-center justify-between text-[10px] mt-0.5" style={{ color: "var(--c-ink-dim)" }}>
+            <span>{sugarEval.diffText}</span>
+            <span className="text-[9px] opacity-80" title="Natural sugars from whole fruits and unflavored dairy are excluded from added sugar cap">
+              Nat: {Math.round(naturalSugarVal)}g · Tot: {Math.round(totals.sugar || 0)}g
+            </span>
+          </div>
         </div>
 
         {/* Vitamin C */}
@@ -573,6 +595,20 @@ function MicronutrientSummaryCard({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {waterMl > 0 && (
+            <button
+              onClick={() => onAddWater(-250)}
+              title="Undo 250ml"
+              className="w-7 h-7 rounded-xl text-xs font-bold border flex items-center justify-center transition active:scale-95 opacity-70 hover:opacity-100"
+              style={{
+                backgroundColor: "var(--c-card-solid)",
+                borderColor: "var(--c-line)",
+                color: "var(--c-ink-dim)",
+              }}
+            >
+              -
+            </button>
+          )}
           <button
             onClick={() => onAddWater(250)}
             className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-white shadow-sm transition active:scale-95"
@@ -650,10 +686,10 @@ function NutrientBreakdownContent({ totals, targets, age, sex, waterMl, onAddWat
         {
           key: "sugarLimit",
           name: "Added Sugar",
-          current: totals.sugar,
+          current: totals.addedSugar ?? 0,
           target: targets.sugarLimit,
           unit: "g",
-          desc: "Recommended cap for metabolic health (<5-10%)",
+          desc: `WHO cap for metabolic health. Natural sugar from whole foods: ${Math.round(Math.max(0, (totals.sugar || 0) - (totals.addedSugar || 0)))}g (Total: ${Math.round(totals.sugar || 0)}g)`,
         },
       ],
     },
@@ -808,6 +844,20 @@ function NutrientBreakdownContent({ totals, targets, age, sex, waterMl, onAddWat
           </div>
 
           <div className="flex items-center gap-2 pt-0.5">
+            {waterMl > 0 && (
+              <button
+                onClick={() => onAddWater(-250)}
+                title="Undo 250ml"
+                className="w-10 py-2 rounded-xl text-xs font-black border flex items-center justify-center transition active:scale-95 opacity-70 hover:opacity-100"
+                style={{
+                  backgroundColor: "var(--c-card2)",
+                  borderColor: "var(--c-line)",
+                  color: "var(--c-ink-dim)",
+                }}
+              >
+                -
+              </button>
+            )}
             <button
               onClick={() => onAddWater(250)}
               className="flex-1 py-2 rounded-xl text-xs font-black bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-sm transition active:scale-95"
@@ -1436,6 +1486,7 @@ function TextMealTab({ apiKey, onDone, onClose }) {
       fat: Math.round((result.fat || 0) * 10) / 10,
       fiber: Math.round((result.fiber || 0) * 10) / 10,
       sugar: Math.round((result.sugar || 0) * 10) / 10,
+      addedSugar: Math.round((result.addedSugar !== undefined ? result.addedSugar : 0) * 10) / 10,
       sodium: Math.round(result.sodium || 0),
       potassium: Math.round(result.potassium || 0),
       calcium: Math.round(result.calcium || 0),
@@ -1653,7 +1704,8 @@ function TextMealTab({ apiKey, onDone, onClose }) {
                 style={{ backgroundColor: "var(--c-card-solid)", borderColor: "var(--c-line)" }}
               >
                 <NumField label="Fiber" unit="g" value={result.fiber} onChange={(v) => updateField("fiber", v)} />
-                <NumField label="Sugar" unit="g" value={result.sugar} onChange={(v) => updateField("sugar", v)} />
+                <NumField label="Total Sugar" unit="g" value={result.sugar} onChange={(v) => updateField("sugar", v)} />
+                <NumField label="Added Sugar" unit="g" value={result.addedSugar ?? 0} onChange={(v) => updateField("addedSugar", v)} />
                 <NumField label="Sodium" unit="mg" value={result.sodium} onChange={(v) => updateField("sodium", v)} />
                 <NumField label="Potassium" unit="mg" value={result.potassium} onChange={(v) => updateField("potassium", v)} />
                 <NumField label="Calcium" unit="mg" value={result.calcium} onChange={(v) => updateField("calcium", v)} />
@@ -1764,6 +1816,7 @@ function PhotoCaptureTab({ kind, apiKey, onDone, onClose }) {
       fat: result.fat || 0,
       fiber: result.fiber || 0,
       sugar: result.sugar || 0,
+      addedSugar: result.addedSugar !== undefined ? result.addedSugar : 0,
       sodium: result.sodium || 0,
       potassium: result.potassium || 0,
       calcium: result.calcium || 0,
@@ -1995,7 +2048,8 @@ function PhotoCaptureTab({ kind, apiKey, onDone, onClose }) {
                 style={{ backgroundColor: "var(--c-card-solid)", borderColor: "var(--c-line)" }}
               >
                 <NumField label="Fiber" unit="g" value={result.fiber} onChange={(v) => updateField("fiber", v)} />
-                <NumField label="Sugar" unit="g" value={result.sugar} onChange={(v) => updateField("sugar", v)} />
+                <NumField label="Total Sugar" unit="g" value={result.sugar} onChange={(v) => updateField("sugar", v)} />
+                <NumField label="Added Sugar" unit="g" value={result.addedSugar ?? 0} onChange={(v) => updateField("addedSugar", v)} />
                 <NumField label="Sodium" unit="mg" value={result.sodium} onChange={(v) => updateField("sodium", v)} />
                 <NumField label="Potassium" unit="mg" value={result.potassium} onChange={(v) => updateField("potassium", v)} />
                 <NumField label="Calcium" unit="mg" value={result.calcium} onChange={(v) => updateField("calcium", v)} />
@@ -2035,8 +2089,10 @@ function PhotoCaptureTab({ kind, apiKey, onDone, onClose }) {
   );
 }
 
-function AddFoodModal({ meal, foods, apiKey, onAddExisting, onAddNew, onClose }) {
+function AddFoodModal({ meal: initialMeal, foods, apiKey, onAddExisting, onAddNew, onClose }) {
+  const [selectedMeal, setSelectedMeal] = useState(initialMeal || getDefaultMealForTime());
   const [tab, setTab] = useState("text"); // Default to natural language text logger
+  const [category, setCategory] = useState("All");
   const [query, setQuery] = useState("");
   const [servingsMap, setServingsMap] = useState({});
   const [showCustomMicros, setShowCustomMicros] = useState(false);
@@ -2048,6 +2104,7 @@ function AddFoodModal({ meal, foods, apiKey, onAddExisting, onAddNew, onClose })
     fat: "",
     fiber: "",
     sugar: "",
+    addedSugar: "",
     sodium: "",
     potassium: "",
     calcium: "",
@@ -2056,9 +2113,33 @@ function AddFoodModal({ meal, foods, apiKey, onAddExisting, onAddNew, onClose })
     servingLabel: "1 serving",
   });
 
-  const filtered = foods.filter((f) =>
-    f.name.toLowerCase().includes(query.toLowerCase())
-  );
+  const libraryItems = useMemo(() => {
+    const userSaved = (foods || []).map((f) => ({
+      ...f,
+      isSaved: true,
+      category: f.category || "Saved",
+      addedSugar: f.addedSugar !== undefined ? f.addedSugar : 0,
+    }));
+    const staples = (POPULAR_STAPLES || []).map((s) => ({
+      ...s,
+      isStaple: true,
+    }));
+    return [...userSaved, ...staples];
+  }, [foods]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return libraryItems.filter((f) => {
+      const matchesQuery =
+        !q ||
+        f.name.toLowerCase().includes(q) ||
+        (f.servingLabel && f.servingLabel.toLowerCase().includes(q));
+      if (!matchesQuery) return false;
+      if (category === "All") return true;
+      if (category === "Saved") return f.isSaved;
+      return f.category === category;
+    });
+  }, [libraryItems, query, category]);
 
   function getServings(id) {
     return servingsMap[id] ?? 1;
@@ -2067,7 +2148,11 @@ function AddFoodModal({ meal, foods, apiKey, onAddExisting, onAddNew, onClose })
   function submitNewFood() {
     const cal = parseFloat(newFood.calories) || 0;
     if (!newFood.name.trim() || cal <= 0) return;
+    const totalSug = parseFloat(newFood.sugar) || 0;
+    const addedSug = Math.max(0, Math.min(totalSug, parseFloat(newFood.addedSugar) || 0));
+
     onAddNew(
+      selectedMeal,
       {
         name: newFood.name.trim(),
         calories: cal,
@@ -2075,7 +2160,8 @@ function AddFoodModal({ meal, foods, apiKey, onAddExisting, onAddNew, onClose })
         carbs: parseFloat(newFood.carbs) || 0,
         fat: parseFloat(newFood.fat) || 0,
         fiber: parseFloat(newFood.fiber) || 0,
-        sugar: parseFloat(newFood.sugar) || 0,
+        sugar: totalSug,
+        addedSugar: addedSug,
         sodium: parseFloat(newFood.sodium) || 0,
         potassium: parseFloat(newFood.potassium) || 0,
         calcium: parseFloat(newFood.calcium) || 0,
@@ -2089,88 +2175,171 @@ function AddFoodModal({ meal, foods, apiKey, onAddExisting, onAddNew, onClose })
   }
 
   return (
-    <ModalShell title={`Add to ${meal}`} onClose={onClose}>
+    <ModalShell title={`Add Food · ${selectedMeal}`} onClose={onClose}>
+      {/* 1. Meal Target Selector */}
+      <div
+        className="flex items-center gap-1 p-1 rounded-2xl border mb-3 overflow-x-auto"
+        style={{ backgroundColor: "var(--c-card2)", borderColor: "var(--c-line)" }}
+      >
+        {MEALS.map((m) => {
+          const active = selectedMeal === m;
+          const conf = MEAL_CONFIG[m];
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setSelectedMeal(m)}
+              className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shrink-0 ${
+                active
+                  ? "bg-pink-500 text-slate-950 shadow-sm"
+                  : "hover:opacity-100"
+              }`}
+              style={{
+                color: active ? "#020617" : "var(--c-ink-dim)",
+              }}
+            >
+              <span>{conf?.emoji}</span>
+              <span>{m}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <TabBar tab={tab} setTab={setTab} />
 
       {tab === "text" && (
-        <TextMealTab apiKey={apiKey} onDone={onAddNew} onClose={onClose} />
+        <TextMealTab
+          apiKey={apiKey}
+          onDone={(data, serv) => onAddNew(selectedMeal, data, serv)}
+          onClose={onClose}
+        />
       )}
 
       {tab === "photo" && (
-        <PhotoCaptureTab kind="photo" apiKey={apiKey} onDone={onAddNew} onClose={onClose} />
+        <PhotoCaptureTab
+          kind="photo"
+          apiKey={apiKey}
+          onDone={(data, serv) => onAddNew(selectedMeal, data, serv)}
+          onClose={onClose}
+        />
       )}
 
       {tab === "label" && (
-        <PhotoCaptureTab kind="label" apiKey={apiKey} onDone={onAddNew} onClose={onClose} />
+        <PhotoCaptureTab
+          kind="label"
+          apiKey={apiKey}
+          onDone={(data, serv) => onAddNew(selectedMeal, data, serv)}
+          onClose={onClose}
+        />
       )}
 
       {tab === "search" && (
-        <div>
+        <div className="space-y-3">
           <input
             autoFocus
-            placeholder="Search saved foods…"
+            placeholder="Search library & foods (apple, roti, dal, whey, egg)..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full px-3.5 py-2.5 rounded-xl border text-sm outline-none mb-3"
+            className="w-full px-3.5 py-2.5 rounded-xl border text-sm outline-none"
             style={{
               backgroundColor: "var(--c-input-bg)",
               borderColor: "var(--c-input-border)",
               color: "var(--c-input-text)",
             }}
           />
-          <div className="max-h-64 overflow-y-auto space-y-2">
+
+          {/* Category Chips */}
+          <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+            {["All", "Saved", "Fruits", "Protein", "Grains", "Dairy", "Meals", "Snacks", "Drinks"].map((cat) => {
+              const active = category === cat;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setCategory(cat)}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0 transition ${
+                    active
+                      ? "bg-pink-500 text-slate-950 shadow-sm"
+                      : "border opacity-70 hover:opacity-100"
+                  }`}
+                  style={{
+                    backgroundColor: active ? "var(--c-macro-cal)" : "var(--c-card2)",
+                    borderColor: active ? "transparent" : "var(--c-line)",
+                    color: active ? "#020617" : "var(--c-ink-dim)",
+                  }}
+                >
+                  {cat}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="max-h-64 overflow-y-auto space-y-2 pr-0.5">
             {filtered.length === 0 && (
               <p className="text-xs py-6 text-center" style={{ color: "var(--c-ink-dim)" }}>
-                {foods.length === 0
-                  ? "No saved foods yet — add one via AI Describe or Custom."
-                  : "No matching foods found."}
+                No matching foods found. Try another search or use AI Describe.
               </p>
             )}
-            {filtered.map((f) => (
-              <div
-                key={f.id}
-                className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
-                style={{ backgroundColor: "var(--c-card2)", borderColor: "var(--c-line)" }}
-              >
-                <div className="min-w-0">
-                  <p className="text-xs font-bold truncate" style={{ color: "var(--c-ink)" }}>
-                    {f.name}
-                  </p>
-                  <p className="text-[11px]" style={{ color: "var(--c-ink-dim)" }}>
-                    {f.calories} kcal · P {f.protein}g · C {f.carbs}g · F {f.fat}g
-                  </p>
+            {filtered.map((f) => {
+              const itemServ = getServings(f.id);
+              const addedSugVal = f.addedSugar ?? 0;
+              const sugarVal = f.sugar ?? 0;
+              return (
+                <div
+                  key={f.id}
+                  className="p-2.5 rounded-2xl border flex items-center justify-between gap-2 transition"
+                  style={{ backgroundColor: "var(--c-card2)", borderColor: "var(--c-line)" }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-bold truncate" style={{ color: "var(--c-ink)" }}>
+                        {f.name}
+                      </p>
+                      {f.isSaved && (
+                        <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-full bg-pink-500/15 text-pink-400 shrink-0">
+                          Saved
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px]" style={{ color: "var(--c-ink-dim)" }}>
+                      {f.calories} kcal · P {f.protein}g · C {f.carbs}g · F {f.fat}g
+                    </p>
+                    <p className="text-[10px] mt-0.5 text-pink-400/80">
+                      {f.servingLabel || "1 serving"} · {addedSugVal === 0 ? "0g Added Sugar" : `Added Sug: ${addedSugVal}g`} (Tot: {sugarVal}g)
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0.5"
+                      value={itemServ}
+                      onChange={(e) =>
+                        setServingsMap({
+                          ...servingsMap,
+                          [f.id]: parseFloat(e.target.value) || 1,
+                        })
+                      }
+                      className="w-12 px-1.5 py-1 rounded-lg border text-xs text-center font-bold"
+                      style={{
+                        backgroundColor: "var(--c-input-bg)",
+                        borderColor: "var(--c-input-border)",
+                        color: "var(--c-input-text)",
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        onAddExisting(selectedMeal, f, itemServ);
+                        onClose();
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-black bg-pink-500 hover:bg-pink-400 text-slate-950 shadow-sm transition active:scale-95"
+                    >
+                      Add
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0.5"
-                    value={getServings(f.id)}
-                    onChange={(e) =>
-                      setServingsMap({
-                        ...servingsMap,
-                        [f.id]: parseFloat(e.target.value) || 1,
-                      })
-                    }
-                    className="w-12 px-1.5 py-1 rounded-lg border text-xs text-center font-bold"
-                    style={{
-                      backgroundColor: "var(--c-input-bg)",
-                      borderColor: "var(--c-input-border)",
-                      color: "var(--c-input-text)",
-                    }}
-                  />
-                  <button
-                    onClick={() => {
-                      onAddExisting(f, getServings(f.id));
-                      onClose();
-                    }}
-                    className="px-2.5 py-1 rounded-lg text-xs font-bold bg-pink-500 hover:bg-pink-400 text-slate-950 transition"
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -2234,13 +2403,14 @@ function AddFoodModal({ meal, foods, apiKey, onAddExisting, onAddNew, onClose })
                 className="p-3 rounded-2xl border grid grid-cols-2 gap-2 mb-2 animate-in fade-in"
                 style={{ backgroundColor: "var(--c-card2)", borderColor: "var(--c-line)" }}
               >
-                <TextField label="Fiber (g)" type="number" value={newFood.fiber} onChange={(e) => setNewFood({ ...newFood, fiber: e.target.value })} />
-                <TextField label="Sugar (g)" type="number" value={newFood.sugar} onChange={(e) => setNewFood({ ...newFood, sugar: e.target.value })} />
-                <TextField label="Sodium (mg)" type="number" value={newFood.sodium} onChange={(e) => setNewFood({ ...newFood, sodium: e.target.value })} />
-                <TextField label="Potassium (mg)" type="number" value={newFood.potassium} onChange={(e) => setNewFood({ ...newFood, potassium: e.target.value })} />
-                <TextField label="Calcium (mg)" type="number" value={newFood.calcium} onChange={(e) => setNewFood({ ...newFood, calcium: e.target.value })} />
-                <TextField label="Iron (mg)" type="number" value={newFood.iron} onChange={(e) => setNewFood({ ...newFood, iron: e.target.value })} />
-                <TextField label="Vitamin C (mg)" type="number" value={newFood.vitaminC} onChange={(e) => setNewFood({ ...newFood, vitaminC: e.target.value })} />
+                <TextField label="Fiber (g)" type="number" value={newFood.fiber} onChange={(e) => setNewFood({ ...newFood, fiber: e.target.value })} placeholder="0" />
+                <TextField label="Total Sugar (g)" type="number" value={newFood.sugar} onChange={(e) => setNewFood({ ...newFood, sugar: e.target.value })} placeholder="0" />
+                <TextField label="Added Sugar (g)" type="number" value={newFood.addedSugar} onChange={(e) => setNewFood({ ...newFood, addedSugar: e.target.value })} placeholder="0" />
+                <TextField label="Sodium (mg)" type="number" value={newFood.sodium} onChange={(e) => setNewFood({ ...newFood, sodium: e.target.value })} placeholder="0" />
+                <TextField label="Potassium (mg)" type="number" value={newFood.potassium} onChange={(e) => setNewFood({ ...newFood, potassium: e.target.value })} placeholder="0" />
+                <TextField label="Calcium (mg)" type="number" value={newFood.calcium} onChange={(e) => setNewFood({ ...newFood, calcium: e.target.value })} placeholder="0" />
+                <TextField label="Iron (mg)" type="number" value={newFood.iron} onChange={(e) => setNewFood({ ...newFood, iron: e.target.value })} placeholder="0" />
+                <TextField label="Vitamin C (mg)" type="number" value={newFood.vitaminC} onChange={(e) => setNewFood({ ...newFood, vitaminC: e.target.value })} placeholder="0" />
               </div>
             )}
           </div>
@@ -2249,7 +2419,7 @@ function AddFoodModal({ meal, foods, apiKey, onAddExisting, onAddNew, onClose })
             onClick={submitNewFood}
             className="w-full py-3 rounded-2xl text-xs font-bold bg-pink-500 hover:bg-pink-400 text-slate-950 shadow-md transition-all active:scale-95"
           >
-            Save & Add to Meal
+            Save & Add to {selectedMeal}
           </button>
         </div>
       )}
@@ -3643,6 +3813,7 @@ export default function DietTracker() {
       fat: Math.round(food.fat * mult * 10) / 10,
       fiber: Math.round((food.fiber || 0) * mult * 10) / 10,
       sugar: Math.round((food.sugar || 0) * mult * 10) / 10,
+      addedSugar: Math.round((food.addedSugar !== undefined ? food.addedSugar : 0) * mult * 10) / 10,
       sodium: Math.round((food.sodium || 0) * mult),
       potassium: Math.round((food.potassium || 0) * mult),
       calcium: Math.round((food.calcium || 0) * mult),
@@ -3688,6 +3859,7 @@ export default function DietTracker() {
         fat: acc.fat + (e.fat || 0),
         fiber: acc.fiber + (e.fiber || 0),
         sugar: acc.sugar + (e.sugar || 0),
+        addedSugar: acc.addedSugar + (e.addedSugar !== undefined ? e.addedSugar : 0),
         sodium: acc.sodium + (e.sodium || 0),
         potassium: acc.potassium + (e.potassium || 0),
         calcium: acc.calcium + (e.calcium || 0),
@@ -3701,6 +3873,7 @@ export default function DietTracker() {
         fat: 0,
         fiber: 0,
         sugar: 0,
+        addedSugar: 0,
         sodium: 0,
         potassium: 0,
         calcium: 0,
@@ -3972,6 +4145,15 @@ export default function DietTracker() {
             {/* 2. Macronutrients Card */}
             <MacronutrientsCard totals={totals} settings={settings} />
 
+            {/* 2b. Micronutrients & Health Summary Card */}
+            <MicronutrientSummaryCard
+              totals={totals}
+              targets={nutrientTargets}
+              waterMl={currentWater}
+              onAddWater={saveWater}
+              onOpenDetails={() => setActiveTab("nutrition")}
+            />
+
             {/* 3. Today's Meal Timeline (Meal Logs) */}
             <div className="space-y-3 pt-1">
               <div className="flex justify-between items-center px-1">
@@ -3982,7 +4164,7 @@ export default function DietTracker() {
                   Meal Logs
                 </h2>
                 <button
-                  onClick={() => setAddFoodMeal("Lunch")}
+                  onClick={() => setAddFoodMeal(getDefaultMealForTime())}
                   className="text-xs text-pink-500 font-semibold hover:underline flex items-center gap-1"
                 >
                   <Plus size={13} /> Add Food
@@ -4222,8 +4404,8 @@ export default function DietTracker() {
 
           {/* 3. Center Action Button (Add Food) */}
           <button
-            onClick={() => setAddFoodMeal("Lunch")}
-            title="Add Food (Camera / Natural Text)"
+            onClick={() => setAddFoodMeal(getDefaultMealForTime())}
+            title="Add Food (Camera / Natural Text / Library)"
             className="w-13 h-13 rounded-full bg-pink-500 hover:bg-pink-400 text-slate-950 font-black text-2xl flex items-center justify-center shadow-lg shadow-pink-500/40 hover:scale-105 active:scale-95 transition-all glow-pink shrink-0"
           >
             +
@@ -4297,8 +4479,8 @@ export default function DietTracker() {
           meal={addFoodMeal}
           foods={foods}
           apiKey={settings.apiKey}
-          onAddExisting={(food, servings) => addExistingFoodEntry(addFoodMeal, food, servings)}
-          onAddNew={(foodData, servings) => addNewFoodAndLog(addFoodMeal, foodData, servings)}
+          onAddExisting={(targetMeal, food, servings) => addExistingFoodEntry(targetMeal || addFoodMeal, food, servings)}
+          onAddNew={(targetMeal, foodData, servings) => addNewFoodAndLog(targetMeal || addFoodMeal, foodData, servings)}
           onClose={() => setAddFoodMeal(null)}
         />
       )}
